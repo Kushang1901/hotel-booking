@@ -7,12 +7,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 🔑 Mongo URI from environment variables
 const uri = process.env.MONGO_URI;
 
-// ✅ DO NOT add useNewUrlParser or useUnifiedTopology
-const client = new MongoClient(uri, {
-  tls: true
-});
+// ✅ Use MongoClient without deprecated options
+const client = new MongoClient(uri, { tls: true });
 
 let bookings;
 
@@ -27,6 +26,12 @@ client.connect()
     console.error("❌ MongoDB connection failed:", err.stack);
   });
 
+// 🏠 Root route to check service health
+app.get("/", (req, res) => {
+  res.json({ status: "ok", service: "Hotel Devang Backend is running 🚀" });
+});
+
+// 📌 Booking API
 app.post('/api/book', async (req, res) => {
   console.log("📥 Received booking request:", req.body);
 
@@ -48,13 +53,14 @@ app.post('/api/book', async (req, res) => {
 
     const result = await bookings.insertOne(bookingData);
     console.log("✅ Booking saved:", result.insertedId);
-    res.status(200).json({ success: true });
+    res.status(200).json({ success: true, bookingId: result.insertedId });
   } catch (err) {
     console.error("❌ Error saving booking:", err.stack);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// ✅ PORT must come from Render (dynamic) or fallback for local dev
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
