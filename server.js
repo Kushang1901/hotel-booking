@@ -50,7 +50,7 @@ app.get('/api/book', async (req, res) => {
   }
 });
 
-// ✅ POST a new booking
+// ✅ POST a new booking (with duplicate prevention)
 app.post('/api/book', async (req, res) => {
   console.log("📥 Received booking request:", req.body);
 
@@ -62,13 +62,27 @@ app.post('/api/book', async (req, res) => {
   try {
     const bookingData = {
       guest_name: req.body.guest_name,
-      contact: req.body.email,
+      contact: req.body.phone,   // ✅ use phone instead of email
       check_in: req.body.check_in,
       check_out: req.body.check_out,
       room_type: req.body.room_type,
       message: req.body.message,
       timestamp: new Date()
     };
+
+    // ✅ Prevent duplicate entries (same guest, phone, check-in/out, room type)
+    const existing = await bookings.findOne({
+      guest_name: bookingData.guest_name,
+      contact: bookingData.contact,
+      check_in: bookingData.check_in,
+      check_out: bookingData.check_out,
+      room_type: bookingData.room_type
+    });
+
+    if (existing) {
+      console.log("⚠️ Duplicate booking ignored");
+      return res.status(200).json({ success: false, message: "Duplicate booking" });
+    }
 
     const result = await bookings.insertOne(bookingData);
     console.log("✅ Booking saved:", result.insertedId);
