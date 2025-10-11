@@ -1,11 +1,11 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch'); // 👈 needed for reCAPTCHA verification
+const fetch = require('node-fetch'); // For reCAPTCHA verification
 const { MongoClient } = require('mongodb');
 
 const app = express();
-app.use(cors());
+app.use(cors()); // Allow requests from all domains, or you can restrict to your frontend domain
 app.use(express.json());
 
 const uri = process.env.MONGO_URI;
@@ -13,7 +13,7 @@ const client = new MongoClient(uri, { tls: true });
 
 let bookings;
 
-// ✅ Connect to MongoDB Atlas before starting server
+// Connect to MongoDB Atlas
 async function startServer() {
     try {
         await client.connect();
@@ -31,16 +31,14 @@ async function startServer() {
     }
 }
 
-// ✅ Default route for Render health check
+// Default route for health check
 app.get('/', (req, res) => {
     res.send("Hotel Devang Booking API is running ✅");
 });
 
-// ✅ GET all bookings (for debugging)
+// GET all bookings (for debugging)
 app.get('/api/book', async (req, res) => {
-    if (!bookings) {
-        return res.status(503).json({ success: false, error: "DB not ready" });
-    }
+    if (!bookings) return res.status(503).json({ success: false, error: "DB not ready" });
 
     try {
         const allBookings = await bookings.find().toArray();
@@ -51,9 +49,9 @@ app.get('/api/book', async (req, res) => {
     }
 });
 
-// ✅ Verify reCAPTCHA with Google
+// Verify reCAPTCHA v3
 async function verifyRecaptcha(token, remoteip) {
-    const secret = process.env.RECAPTCHA_SECRET_KEY; // 👈 keep in .env
+    const secret = process.env.RECAPTCHA_SECRET_KEY; // from .env
     const url = `https://www.google.com/recaptcha/api/siteverify`;
 
     try {
@@ -66,28 +64,35 @@ async function verifyRecaptcha(token, remoteip) {
                 remoteip: remoteip
             })
         });
-        return await response.json();
+
+        const data = await response.json();
+        // v3 provides a score (0.0 to 1.0). Accept only if score >= 0.5
+        if (!data.success || data.score < 0.5) {
+            console.log("⚠️ reCAPTCHA failed:", data);
+            return false;
+        }
+        return true;
     } catch (err) {
         console.error("❌ Error verifying reCAPTCHA:", err);
-        return { success: false };
+        return false;
     }
 }
 
-// ✅ POST a new booking (with duplicate prevention + reCAPTCHA)
+// POST a new booking
 app.post('/api/book', async (req, res) => {
     console.log("📥 Received booking request:", req.body);
 
-    if (!bookings) {
-        return res.status(503).json({ success: false, error: 'Server initializing, try again' });
-    }
+    if (!bookings) return res.status(503).json({ success: false, error: 'Server initializing, try again' });
 
     try {
         const { guest_name, phone, check_in, check_out, room_type, message, token } = req.body;
 
-        // 1️⃣ Verify reCAPTCHA token
-        const recaptchaRes = await verifyRecaptcha(token, req.ip);
-        if (!recaptchaRes.success || recaptchaRes.score < 0.5) {
-            console.log("⚠️ reCAPTCHA failed:", recaptchaRes);
+        if (!token) {
+            return res.status(400).json({ success: false, error: "reCAPTCHA token missing" });
+        }
+
+        const isHuman = await verifyRecaptcha(token, req.ip);
+        if (!isHuman) {
             return res.status(403).json({ success: false, error: "reCAPTCHA verification failed" });
         }
 
@@ -101,7 +106,7 @@ app.post('/api/book', async (req, res) => {
             timestamp: new Date()
         };
 
-        // 2️⃣ Prevent duplicate entries
+        // Prevent duplicate bookings
         const existing = await bookings.findOne({
             guest_name: bookingData.guest_name,
             contact: bookingData.contact,
@@ -115,7 +120,7 @@ app.post('/api/book', async (req, res) => {
             return res.status(200).json({ success: false, message: "Duplicate booking" });
         }
 
-        // 3️⃣ Save booking
+        // Save booking
         const result = await bookings.insertOne(bookingData);
         console.log("✅ Booking saved:", result.insertedId);
         res.status(200).json({ success: true, id: result.insertedId });
