@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
 const { MongoClient } = require('mongodb');
 
 const app = express();
@@ -56,30 +55,7 @@ app.get('/api/book', async (req, res) => {
     }
 });
 
-// ✅ reCAPTCHA verification (v3)
-async function verifyRecaptcha(token) {
-    const secret = process.env.RECAPTCHA_SECRET_KEY;
-    const url = "https://www.google.com/recaptcha/api/siteverify";
-
-    try {
-        const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ secret, response: token })
-        });
-
-        const data = await response.json();
-        console.log("🔍 reCAPTCHA response:", data);
-
-        // ✅ Accept only if success and score >= 0.5
-        return data.success && data.score >= 0.5;
-    } catch (err) {
-        console.error("❌ Error verifying reCAPTCHA:", err);
-        return false;
-    }
-}
-
-// ✅ Handle booking submission
+// ✅ Handle booking submission (NO reCAPTCHA)
 app.post('/api/book', async (req, res) => {
     console.log("📥 Received booking request:", req.body);
 
@@ -87,14 +63,12 @@ app.post('/api/book', async (req, res) => {
         return res.status(503).json({ success: false, error: 'Server initializing, try again' });
 
     try {
-        const { guest_name, phone, check_in, check_out, room_type, message, token } = req.body;
+        const { guest_name, phone, check_in, check_out, room_type, message } = req.body;
 
-        if (!token)
-            return res.status(400).json({ success: false, error: "reCAPTCHA token missing" });
-
-        const isHuman = await verifyRecaptcha(token);
-        if (!isHuman)
-            return res.status(403).json({ success: false, error: "reCAPTCHA verification failed" });
+        // ✅ Basic validation
+        if (!guest_name || !phone || !check_in || !check_out || !room_type) {
+            return res.status(400).json({ success: false, error: "Missing required fields" });
+        }
 
         const bookingData = {
             guest_name,
@@ -102,7 +76,7 @@ app.post('/api/book', async (req, res) => {
             check_in,
             check_out,
             room_type,
-            message,
+            message: message || "None",
             timestamp: new Date()
         };
 
@@ -120,7 +94,7 @@ app.post('/api/book', async (req, res) => {
             return res.status(200).json({ success: false, message: "Duplicate booking" });
         }
 
-        // ✅ Save booking
+        // ✅ Save booking to MongoDB
         const result = await bookings.insertOne(bookingData);
         console.log("✅ Booking saved:", result.insertedId);
 
