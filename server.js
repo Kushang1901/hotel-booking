@@ -9,11 +9,13 @@ const app = express();
 app.use(cors({
     origin: [
         "https://hoteldevang.com",
-        "https://www.hoteldevang.com"
+        "https://www.hoteldevang.com",
+        "https://hotel-devang.onrender.com"  // ← add this line
     ],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"]
 }));
+
 
 app.use(express.json());
 
