@@ -10,11 +10,13 @@ app.use(cors({
     origin: [
         "https://hoteldevang.com",
         "https://www.hoteldevang.com",
-        "https://hotel-devang.onrender.com"  // ← add this line
+        "https://hotel-devang.onrender.com"  // ✅ Added your frontend Render domain
     ],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"]
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+    credentials: true
 }));
+
 
 
 app.use(express.json());
