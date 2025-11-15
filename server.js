@@ -1,32 +1,52 @@
 require('dotenv').config();
+
+// ----------------------
+// ✅ SENTRY INITIALIZATION (MUST BE AT VERY TOP)
+// ----------------------
+const Sentry = require("@sentry/node");
+
+Sentry.init({
+    dsn: "https://85d2d49ed3791ee151e850d24b9042ad@o4510370568470528.ingest.us.sentry.io/4510370686369792",
+    sendDefaultPii: true,
+});
+
 const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
 
 const app = express();
 
-// ✅ Allow only your website frontend to access the API
+// ----------------------
+// ✅ SENTRY REQUEST HANDLER (MUST COME BEFORE ROUTES)
+// ----------------------
+app.use(Sentry.Handlers.requestHandler());
+
+// ----------------------
+// ✅ CORS (ONLY ALLOW YOUR DOMAINS)
+// ----------------------
 app.use(cors({
     origin: [
         "https://hoteldevang.com",
         "https://www.hoteldevang.com",
-        "https://hotel-devang.onrender.com"  // ✅ Added your frontend Render domain
+        "https://hotel-devang.onrender.com"
     ],
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
     credentials: true
 }));
 
-
-
 app.use(express.json());
 
-// ✅ MongoDB setup
+// ----------------------
+// ✅ MONGO DB SETUP
+// ----------------------
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri, { tls: true });
 let bookings;
 
-// ✅ Connect to MongoDB
+// ----------------------
+// ✅ START SERVER + DB CONNECTION
+// ----------------------
 async function startServer() {
     try {
         await client.connect();
@@ -38,28 +58,40 @@ async function startServer() {
         app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
     } catch (err) {
         console.error("❌ MongoDB connection failed:", err);
+
+        // Send to Sentry
+        Sentry.captureException(err);
+
         process.exit(1);
     }
 }
 
-// ✅ Health check
+// ----------------------
+// 🟢 ROUTES
+// ----------------------
+
+// Health check
 app.get('/', (req, res) => {
     res.send("Hotel Devang Booking API is running ✅");
 });
 
-// ✅ Get all bookings (for debugging)
+// GET all bookings
 app.get('/api/book', async (req, res) => {
     if (!bookings) return res.status(503).json({ success: false, error: "DB not ready" });
+
     try {
         const allBookings = await bookings.find().toArray();
         res.status(200).json({ success: true, data: allBookings });
     } catch (err) {
         console.error("❌ Error fetching bookings:", err);
+
+        Sentry.captureException(err);
+
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// ✅ Handle booking submission (NO reCAPTCHA)
+// SAVE booking
 app.post('/api/book', async (req, res) => {
     console.log("📥 Received booking request:", req.body);
 
@@ -69,7 +101,6 @@ app.post('/api/book', async (req, res) => {
     try {
         const { guest_name, phone, check_in, check_out, room_type, message } = req.body;
 
-        // ✅ Basic validation
         if (!guest_name || !phone || !check_in || !check_out || !room_type) {
             return res.status(400).json({ success: false, error: "Missing required fields" });
         }
@@ -84,7 +115,7 @@ app.post('/api/book', async (req, res) => {
             timestamp: new Date()
         };
 
-        // ✅ Prevent duplicate bookings
+        // Prevent duplicate bookings
         const existing = await bookings.findOne({
             guest_name: bookingData.guest_name,
             contact: bookingData.contact,
@@ -98,15 +129,23 @@ app.post('/api/book', async (req, res) => {
             return res.status(200).json({ success: false, message: "Duplicate booking" });
         }
 
-        // ✅ Save booking to MongoDB
         const result = await bookings.insertOne(bookingData);
         console.log("✅ Booking saved:", result.insertedId);
 
         res.status(200).json({ success: true, id: result.insertedId });
     } catch (err) {
         console.error("❌ Error saving booking:", err);
+
+        Sentry.captureException(err);
+
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
+// ----------------------
+// ❗ SENTRY ERROR HANDLER (MUST BE LAST)
+// ----------------------
+app.use(Sentry.Handlers.errorHandler());
+
+// Start server
 startServer();
