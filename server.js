@@ -1,7 +1,8 @@
 require('dotenv').config();
 
 // ----------------------
-// ✅ SENTRY INITIALIZATION (MUST BE AT VERY TOP)
+// ✅ SENTRY INITIALIZATION (MUST BE AT TOP)
+// Using Sentry v7 for Express compatibility
 // ----------------------
 const Sentry = require("@sentry/node");
 
@@ -17,12 +18,13 @@ const { MongoClient } = require('mongodb');
 const app = express();
 
 // ----------------------
-// ✅ SENTRY REQUEST HANDLER (MUST COME BEFORE ROUTES)
+// ✅ SENTRY REQUEST HANDLER (BEFORE ROUTES)
 // ----------------------
 app.use(Sentry.Handlers.requestHandler());
 
+
 // ----------------------
-// ✅ CORS (ONLY ALLOW YOUR DOMAINS)
+// ✅ CORS (ALLOW ONLY YOUR DOMAINS)
 // ----------------------
 app.use(cors({
     origin: [
@@ -45,7 +47,7 @@ const client = new MongoClient(uri, { tls: true });
 let bookings;
 
 // ----------------------
-// ✅ START SERVER + DB CONNECTION
+// ✅ START SERVER + CONNECT MONGO
 // ----------------------
 async function startServer() {
     try {
@@ -59,7 +61,7 @@ async function startServer() {
     } catch (err) {
         console.error("❌ MongoDB connection failed:", err);
 
-        // Send to Sentry
+        // Send error to Sentry too
         Sentry.captureException(err);
 
         process.exit(1);
@@ -70,12 +72,12 @@ async function startServer() {
 // 🟢 ROUTES
 // ----------------------
 
-// Health check
+// Health Check
 app.get('/', (req, res) => {
     res.send("Hotel Devang Booking API is running ✅");
 });
 
-// GET all bookings
+// Get All Bookings
 app.get('/api/book', async (req, res) => {
     if (!bookings) return res.status(503).json({ success: false, error: "DB not ready" });
 
@@ -91,7 +93,7 @@ app.get('/api/book', async (req, res) => {
     }
 });
 
-// SAVE booking
+// Add New Booking
 app.post('/api/book', async (req, res) => {
     console.log("📥 Received booking request:", req.body);
 
@@ -115,7 +117,7 @@ app.post('/api/book', async (req, res) => {
             timestamp: new Date()
         };
 
-        // Prevent duplicate bookings
+        // Prevent Duplicate Bookings
         const existing = await bookings.findOne({
             guest_name: bookingData.guest_name,
             contact: bookingData.contact,
@@ -147,5 +149,5 @@ app.post('/api/book', async (req, res) => {
 // ----------------------
 app.use(Sentry.Handlers.errorHandler());
 
-// Start server
+// Start Server
 startServer();
