@@ -1,8 +1,7 @@
 require('dotenv').config();
 
 // ----------------------
-// ✅ SENTRY INITIALIZATION (MUST BE AT TOP)
-// Using Sentry v7 for Express compatibility
+// 🔔 SENTRY INITIALIZATION (AT TOP)
 // ----------------------
 const Sentry = require("@sentry/node");
 
@@ -18,13 +17,12 @@ const { MongoClient } = require('mongodb');
 const app = express();
 
 // ----------------------
-// ✅ SENTRY REQUEST HANDLER (BEFORE ROUTES)
+// 🛡 SENTRY REQUEST HANDLER
 // ----------------------
 app.use(Sentry.Handlers.requestHandler());
 
-
 // ----------------------
-// ✅ CORS (ALLOW ONLY YOUR DOMAINS)
+// 🌐 CORS ALLOWED DOMAINS
 // ----------------------
 app.use(cors({
     origin: [
@@ -40,30 +38,31 @@ app.use(cors({
 app.use(express.json());
 
 // ----------------------
-// ✅ MONGO DB SETUP
+// 🗃 MONGODB CONNECTION
 // ----------------------
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri, { tls: true });
 let bookings;
+let visitorSessions; // ⭐ NEW COLLECTION
 
 // ----------------------
-// ✅ START SERVER + CONNECT MONGO
+// 🚀 START SERVER AND CONNECT DB
 // ----------------------
 async function startServer() {
     try {
         await client.connect();
         const db = client.db("hotel_devang");
+
         bookings = db.collection("bookings");
+        visitorSessions = db.collection("visitor_sessions"); // ⭐ NEW
+
         console.log("✅ Connected to MongoDB Atlas");
 
         const PORT = process.env.PORT || 3000;
         app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
     } catch (err) {
         console.error("❌ MongoDB connection failed:", err);
-
-        // Send error to Sentry too
         Sentry.captureException(err);
-
         process.exit(1);
     }
 }
@@ -72,12 +71,12 @@ async function startServer() {
 // 🟢 ROUTES
 // ----------------------
 
-// Health Check
+// 📍 Health Check
 app.get('/', (req, res) => {
     res.send("Hotel Devang Booking API is running ✅");
 });
 
-// Get All Bookings
+// 📘 Get All Bookings
 app.get('/api/book', async (req, res) => {
     if (!bookings) return res.status(503).json({ success: false, error: "DB not ready" });
 
@@ -86,14 +85,12 @@ app.get('/api/book', async (req, res) => {
         res.status(200).json({ success: true, data: allBookings });
     } catch (err) {
         console.error("❌ Error fetching bookings:", err);
-
         Sentry.captureException(err);
-
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// Add New Booking
+// ✍ Add New Booking
 app.post('/api/book', async (req, res) => {
     console.log("📥 Received booking request:", req.body);
 
@@ -117,7 +114,7 @@ app.post('/api/book', async (req, res) => {
             timestamp: new Date()
         };
 
-        // Prevent Duplicate Bookings
+        // 🚫 Prevent Duplicate Bookings
         const existing = await bookings.findOne({
             guest_name: bookingData.guest_name,
             contact: bookingData.contact,
@@ -137,17 +134,38 @@ app.post('/api/book', async (req, res) => {
         res.status(200).json({ success: true, id: result.insertedId });
     } catch (err) {
         console.error("❌ Error saving booking:", err);
-
         Sentry.captureException(err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
+
+// ⭐ NEW API FOR COOKIE USER SESSION TRACKING ⭐
+app.post('/api/log-session', async (req, res) => {
+    try {
+        const { sessionId, page, eventType, timestamp } = req.body;
+
+        await visitorSessions.insertOne({
+            sessionId,
+            page,
+            eventType, // "page_visit" or "page_exit"
+            timestamp: new Date(timestamp),
+            userAgent: req.headers['user-agent'],
+            ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress
+        });
+
+        res.status(200).json({ success: true, message: "Session logged" });
+    } catch (err) {
+        console.error("❌ Error logging session:", err);
+        Sentry.captureException(err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
 // ----------------------
-// ❗ SENTRY ERROR HANDLER (MUST BE LAST)
+// 🛑 SENTRY ERROR HANDLER - MUST BE LAST
 // ----------------------
 app.use(Sentry.Handlers.errorHandler());
 
-// Start Server
+// 🚀 Start Server
 startServer();
