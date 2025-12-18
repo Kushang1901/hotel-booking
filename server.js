@@ -98,7 +98,8 @@ app.post('/api/book', async (req, res) => {
         return res.status(503).json({ success: false, error: 'Server initializing, try again' });
 
     try {
-        const { guest_name, phone, check_in, check_out, room_type, message } = req.body;
+        const { guest_name, phone, check_in, check_out, room_type, message, device } = req.body;
+
 
         if (!guest_name || !phone || !check_in || !check_out || !room_type) {
             return res.status(400).json({ success: false, error: "Missing required fields" });
@@ -111,8 +112,10 @@ app.post('/api/book', async (req, res) => {
             check_out,
             room_type,
             message: message || "None",
+            device: device || "Unknown",
             timestamp: new Date()
         };
+
 
         // 🚫 Prevent Duplicate Bookings
         const existing = await bookings.findOne({
