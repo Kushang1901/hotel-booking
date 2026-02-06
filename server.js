@@ -174,13 +174,3 @@ app.use(Sentry.Handlers.errorHandler());
 startServer();
 
 
-
-
-
-
-
-app.get("/my-ip", (req, res) => {
-    res.json({
-        ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress
-    });
-});
