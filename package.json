@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@sentry/node": "^7.120.4",
+    "axios": "^1.13.5",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
