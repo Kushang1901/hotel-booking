@@ -13,6 +13,7 @@ Sentry.init({
 const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
+const axios = require("axios");
 
 const app = express();
 
@@ -98,11 +99,49 @@ app.post('/api/book', async (req, res) => {
         return res.status(503).json({ success: false, error: 'Server initializing, try again' });
 
     try {
-        const { guest_name, phone, check_in, check_out, room_type, message, device } = req.body;
+        const {
+            guest_name,
+            phone,
+            check_in,
+            check_out,
+            room_type,
+            message,
+            device,
+            recaptchaToken
+        } = req.body;
 
+        // 🔒 1️⃣ Check reCAPTCHA token exists
+        if (!recaptchaToken) {
+            return res.status(400).json({ success: false, error: "reCAPTCHA token missing" });
+        }
 
+        // 🔒 2️⃣ Verify reCAPTCHA with Google
+        const verifyURL = "https://www.google.com/recaptcha/api/siteverify";
+
+        const recaptchaResponse = await axios.post(
+            verifyURL,
+            null,
+            {
+                params: {
+                    secret: process.env.RECAPTCHA_SECRET,
+                    response: recaptchaToken
+                }
+            }
+        );
+
+        if (!recaptchaResponse.data.success) {
+            return res.status(400).json({
+                success: false,
+                error: "reCAPTCHA verification failed"
+            });
+        }
+
+        // 🔹 3️⃣ Validate Required Fields
         if (!guest_name || !phone || !check_in || !check_out || !room_type) {
-            return res.status(400).json({ success: false, error: "Missing required fields" });
+            return res.status(400).json({
+                success: false,
+                error: "Missing required fields"
+            });
         }
 
         const bookingData = {
@@ -116,8 +155,7 @@ app.post('/api/book', async (req, res) => {
             timestamp: new Date()
         };
 
-
-        // 🚫 Prevent Duplicate Bookings
+        // 🚫 4️⃣ Prevent Duplicate Bookings
         const existing = await bookings.findOne({
             guest_name: bookingData.guest_name,
             contact: bookingData.contact,
@@ -128,13 +166,21 @@ app.post('/api/book', async (req, res) => {
 
         if (existing) {
             console.log("⚠️ Duplicate booking ignored");
-            return res.status(200).json({ success: false, message: "Duplicate booking" });
+            return res.status(200).json({
+                success: false,
+                message: "Duplicate booking"
+            });
         }
 
+        // ✅ 5️⃣ Save Booking
         const result = await bookings.insertOne(bookingData);
         console.log("✅ Booking saved:", result.insertedId);
 
-        res.status(200).json({ success: true, id: result.insertedId });
+        res.status(200).json({
+            success: true,
+            id: result.insertedId
+        });
+
     } catch (err) {
         console.error("❌ Error saving booking:", err);
         Sentry.captureException(err);
@@ -172,5 +218,4 @@ app.use(Sentry.Handlers.errorHandler());
 
 // 🚀 Start Server
 startServer();
-
 
