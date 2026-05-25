@@ -43,26 +43,39 @@ app.use(cors({
 
 app.use(express.json());
 
+// 📞 REGISTER WHATSAPP MIDDLEWARE ROUTES
+const whatsappRoutes = require('./src/routes/whatsappRoutes');
+app.use(whatsappRoutes);
+
 // ----------------------
 // 🗃 MONGODB CONNECTION
 // ----------------------
-const uri = process.env.MONGO_URI;
-const client = new MongoClient(uri, { tls: true });
+const db = require('./src/config/db');
+const client = db.client; // Retain client for backwards compatibility in other routes
 let bookings;
-let visitorSessions; // ⭐ NEW COLLECTION
+let visitorSessions; 
 
 // ----------------------
 // 🚀 START SERVER AND CONNECT DB
 // ----------------------
 async function startServer() {
     try {
-        await client.connect();
-        const db = client.db("hotel_devang");
+        const database = await db.connectDB();
 
-        bookings = db.collection("bookings");
-        visitorSessions = db.collection("visitor_sessions"); // ⭐ NEW
+        bookings = database.collection("bookings");
+        visitorSessions = database.collection("visitor_sessions"); 
 
-        console.log("✅ Connected to MongoDB Atlas");
+        console.log("✅ Connected to MongoDB Atlas via shared DB module");
+
+        // 📞 WhatsApp Service and Retry Scheduler Initialization
+        const whatsappService = require('./src/services/whatsappService');
+        const retryService = require('./src/services/retryService');
+        
+        whatsappService.initializeWhatsAppClient().catch(err => {
+            console.error("❌ Failed to auto-initialize WhatsApp Service on startup:", err);
+        });
+        
+        retryService.startRetryScheduler();
 
         const PORT = process.env.PORT || 3000;
         app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
@@ -180,6 +193,24 @@ app.post('/api/book', async (req, res) => {
         // ✅ 5️⃣ Save Booking
         const result = await bookings.insertOne(bookingData);
         console.log("✅ Booking saved:", result.insertedId);
+
+        // 📞 Send WhatsApp Notification to Owner
+        const whatsappService = require('./src/services/whatsappService');
+        whatsappService.sendBookingNotificationToOwner({
+            bookingId: result.insertedId.toString(),
+            guestName: bookingData.guest_name,
+            phone: bookingData.contact,
+            roomType: bookingData.room_type,
+            checkIn: bookingData.check_in,
+            checkOut: bookingData.check_out,
+            totalAmount: 0, // Admin created bookings might not have pricing details in the payload
+            paidAmount: 0,
+            dueAmount: 0,
+            paymentStatus: "N/A (Admin Created)",
+            specialRequests: bookingData.message
+        }).catch(err => {
+            console.error("WhatsApp notification dispatch background error:", err);
+        });
 
         res.status(200).json({
             success: true,
@@ -467,6 +498,12 @@ app.post('/api/public/book', async (req, res) => {
         };
 
         await bookings.insertOne(newBooking);
+
+        // 📞 Send WhatsApp Notification to Owner
+        const whatsappService = require('./src/services/whatsappService');
+        whatsappService.sendBookingNotificationToOwner(newBooking).catch(err => {
+            console.error("WhatsApp notification dispatch background error:", err);
+        });
 
         res.status(200).json({
             success: true,
