@@ -42,7 +42,7 @@ async function initializeWhatsAppClient() {
 
     try {
         console.log("🚀 Initializing WhatsApp Web Client...");
-        await sessionModel.updateSession({ status: 'CONNECTING', qrCode: null });
+        await sessionModel.updateSession({ status: 'CONNECTING', qrCode: null, error: null });
 
         client = new Client({
             authStrategy: new LocalAuth({
