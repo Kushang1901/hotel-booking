@@ -29,7 +29,7 @@ app.use(cors({
     origin: [
         "https://hoteldevang.com",
         "https://www.hoteldevang.com",
-        "https://hotel-devang.onrender.com",
+        "https://hotel-booking-1-gg1m.onrender.com",
         "http://localhost:3000",
         "http://localhost:5500",
         "http://127.0.0.1:5500",
