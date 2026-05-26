@@ -220,6 +220,12 @@ async function sendBookingNotificationToOwner(booking) {
         roomDetails = `${booking.roomType} (${booking.selectedSubtype})`;
     }
 
+    // Format guest phone number nicely
+    let cleanGuestPhone = booking.phone.replace(/\D/g, "");
+    if (cleanGuestPhone.length === 10) {
+        cleanGuestPhone = "91" + cleanGuestPhone;
+    }
+
     // Compile beautiful message template
     const textMessage = `🛎️ *NEW HOTEL BOOKING SUCCESS* 🛎️\n\n` +
         `Dear Owner,\n` +
@@ -227,7 +233,7 @@ async function sendBookingNotificationToOwner(booking) {
         `📝 *Booking Information:*\n` +
         `• *Booking ID:* ${bookingId}\n` +
         `• *Guest Name:* ${booking.guestName}\n` +
-        `• *Phone Number:* +${booking.phone.replace(/\D/g, "")}\n\n` +
+        `• *Phone Number:* +${cleanGuestPhone}\n\n` +
         `🛏️ *Room Details:*\n` +
         `• *Room Type:* ${roomDetails}\n` +
         `• *Stay Period:* ${checkInDateStr} to ${checkOutDateStr}\n` +
