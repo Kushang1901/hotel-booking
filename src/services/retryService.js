@@ -12,12 +12,7 @@ let isProcessing = false;
 async function processPendingRetries() {
     if (isProcessing) return;
     
-    const client = whatsappService.getClient();
-    // Only attempt to process retries if WhatsApp is actually connected and ready!
-    if (!client || !client.info || !client.info.wid) {
-        console.log("⏳ WhatsApp client not connected. Postponing background retry queue processing.");
-        return;
-    }
+    // Meta Cloud API is always online and ready to send messages!
 
     isProcessing = true;
     console.log("🔄 Background Retry Service: Checking for pending failed WhatsApp messages...");

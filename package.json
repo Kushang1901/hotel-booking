@@ -17,7 +17,6 @@
     "node-fetch": "^3.3.2",
     "oracledb": "^6.9.0",
     "qrcode": "^1.5.4",
-    "twilio": "^5.7.3",
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
+    "twilio": "^5.7.3"
   }
 }

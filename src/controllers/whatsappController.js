@@ -108,7 +108,7 @@ async function logout(req, res) {
         console.log("🔌 Manual logout triggered...");
         const client = whatsappService.getClient();
         
-        if (client) {
+        if (client && typeof client.logout === 'function') {
             try {
                 await client.logout();
                 await client.destroy();

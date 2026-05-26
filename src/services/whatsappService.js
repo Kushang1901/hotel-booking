@@ -1,16 +1,12 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
 const sessionModel = require('../models/whatsappSession');
 const logModel = require('../models/notificationLog');
 const retryModel = require('../models/failedRetry');
 const bookingModel = require('../models/bookingNotification');
 
-let client = null;
-let isClientReady = false;
-let isInitializing = false;
-let reconnectTimer = null;
+let isClientReady = true;
 
 /**
- * Formats a raw phone number to the WhatsApp JID format: [countryCode][number]@c.us
+ * Formats a raw phone number to a clean, all-digits country-prefixed string
  * @param {string} phone 
  */
 function formatWhatsAppNumber(phone) {
@@ -22,147 +18,74 @@ function formatWhatsAppNumber(phone) {
         cleanPhone = "91" + cleanPhone;
     }
     
-    if (!cleanPhone.endsWith("@c.us")) {
-        cleanPhone = cleanPhone + "@c.us";
-    }
-    
     return cleanPhone;
 }
 
 /**
- * Initializes the whatsapp-web.js Client with persistent LocalAuth
+ * Initializes the WhatsApp connection status to CONNECTED in the database
  */
 async function initializeWhatsAppClient() {
-    if (client) {
-        console.log("⚠️ WhatsApp Client already initialized or initializing.");
-        return client;
-    }
-
-    if (isInitializing) return;
-    isInitializing = true;
-
     try {
-        console.log("🚀 Initializing WhatsApp Web Client...");
-        await sessionModel.updateSession({ status: 'CONNECTING', qrCode: null, error: null });
-
-        client = new Client({
-            authStrategy: new LocalAuth({
-                clientId: sessionModel.CLIENT_ID
-            }),
-            webVersionCache: {
-                type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1040100380-alpha.html',
-            },
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            puppeteer: {
-                headless: true,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--disable-gpu',
-                    '--disable-software-rasterizer'
-                ],
-                // On VPS it might be helpful to run with no-sandbox flags to avoid Chromium crashes
-            }
-        });
-
-        // 🟢 EVENT: QR Code Received
-        client.on('qr', async (qr) => {
-            console.log("📲 WhatsApp QR Code generated. Scan now on the dashboard!");
-            await sessionModel.saveQrCode(qr);
-        });
-
-        // 🟢 EVENT: Authenticated Successfully
-        client.on('authenticated', () => {
-            console.log("✅ WhatsApp Web authenticated successfully!");
-        });
-
-        // 🟢 EVENT: Authentication Failed
-        client.on('auth_failure', async (msg) => {
-            console.error("❌ WhatsApp Authentication failure:", msg);
-            await sessionModel.setDisconnected("Authentication failed: " + msg);
-            scheduleReconnect();
-        });
-
-        // 🟢 EVENT: Client Ready
-        client.on('ready', async () => {
-            console.log("🎉 WhatsApp Client is READY to send messages!");
-            isClientReady = true;
-            const myNumber = client.info?.wid?.user || 'Unknown';
-            await sessionModel.setConnected(myNumber);
-        });
-
-        // 🟢 EVENT: Disconnected
-        client.on('disconnected', async (reason) => {
-            console.warn("⚠️ WhatsApp Client disconnected:", reason);
-            isClientReady = false;
-            await sessionModel.setDisconnected("Disconnected: " + reason);
-            
-            // Clean up puppeteer/client state
-            try {
-                await client.destroy();
-            } catch (e) {
-                console.error("Error destroying disconnected client:", e);
-            }
-            client = null;
-            
-            scheduleReconnect();
-        });
-
-        // Start initialization
-        await client.initialize();
-
+        console.log("🚀 Meta WhatsApp Cloud API Service Initialized");
+        const ownerNumber = process.env.WHATSAPP_OWNER_NUMBER || '919824402132';
+        await sessionModel.setConnected(ownerNumber);
+        isClientReady = true;
     } catch (error) {
-        console.error("❌ Failed to initialize WhatsApp Client:", error);
-        await sessionModel.setDisconnected("Init error: " + error.message);
-        isClientReady = false;
-        isInitializing = false;
-        client = null;
-        scheduleReconnect();
-    } finally {
-        isInitializing = false;
+        console.error("❌ Failed to initialize Meta WhatsApp session status:", error);
     }
-
-    return client;
+    return true;
 }
 
 /**
- * Schedule a client reconnection with a delay
- */
-function scheduleReconnect() {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    
-    console.log("🔄 Scheduling WhatsApp reconnect in 10 seconds...");
-    reconnectTimer = setTimeout(async () => {
-        console.log("🔄 Attempting to reconnect WhatsApp client...");
-        await initializeWhatsAppClient();
-    }, 10000);
-}
-
-/**
- * Sends a WhatsApp message
+ * Sends a WhatsApp message via Meta's Official WhatsApp Cloud API
  * @param {string} to - Raw phone number or formatted JID
  * @param {string} messageText - Text content
  */
 async function sendMessage(to, messageText) {
-    if (!client || !isClientReady) {
-        throw new Error("WhatsApp client not ready. Message postponed.");
+    const token = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+    if (!token || !phoneId) {
+        throw new Error("Meta WhatsApp Cloud API credentials (WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID) not configured in .env.");
     }
 
-    const formattedTo = to.includes('@c.us') ? to : formatWhatsAppNumber(to);
-    if (!formattedTo) {
-        throw new Error("Invalid phone number format: " + to);
+    const cleanTo = to.includes('@c.us') ? to.replace('@c.us', '') : to.replace(/\D/g, "");
+    let formattedTo = cleanTo;
+    
+    if (formattedTo.length === 10) {
+        formattedTo = "91" + formattedTo;
     }
 
     try {
-        console.log(`📤 Sending WhatsApp message to: ${formattedTo}...`);
-        const response = await client.sendMessage(formattedTo, messageText);
-        console.log(`✅ WhatsApp message sent! Message ID: ${response.id.id}`);
-        return response;
+        console.log(`📤 Sending WhatsApp message via Meta Cloud API to: ${formattedTo}...`);
+        
+        const response = await fetch(`https://graph.facebook.com/v18.0/${phoneId}/messages`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                messaging_product: "whatsapp",
+                recipient_type: "individual",
+                to: formattedTo,
+                type: "text",
+                text: {
+                    preview_url: false,
+                    body: messageText
+                }
+            })
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+            console.error("Meta API error details:", data);
+            throw new Error(data.error?.message || "Meta API request failed");
+        }
+
+        console.log(`✅ WhatsApp message sent successfully! Meta Message ID: ${data.messages?.[0]?.id}`);
+        return data;
     } catch (error) {
         console.error(`❌ Failed to send WhatsApp message to ${formattedTo}:`, error);
         throw error;
@@ -224,7 +147,7 @@ async function sendBookingNotificationToOwner(booking) {
     }
 
     // Format guest phone number nicely
-    let cleanGuestPhone = booking.phone.replace(/\D/g, "");
+    let cleanGuestPhone = booking.phone ? booking.phone.replace(/\D/g, "") : "";
     if (cleanGuestPhone.length === 10) {
         cleanGuestPhone = "91" + cleanGuestPhone;
     }
@@ -291,10 +214,10 @@ async function sendBookingNotificationToOwner(booking) {
 }
 
 /**
- * Gets the active client instance
+ * Gets the active client instance placeholder (returns true for Meta API)
  */
 function getClient() {
-    return client;
+    return true;
 }
 
 module.exports = {
