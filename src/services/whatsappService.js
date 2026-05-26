@@ -5,6 +5,7 @@ const retryModel = require('../models/failedRetry');
 const bookingModel = require('../models/bookingNotification');
 
 let client = null;
+let isClientReady = false;
 let isInitializing = false;
 let reconnectTimer = null;
 
@@ -50,7 +51,7 @@ async function initializeWhatsAppClient() {
             }),
             webVersionCache: {
                 type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1040100380-alpha.html',
             },
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             puppeteer: {
@@ -62,7 +63,6 @@ async function initializeWhatsAppClient() {
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
                     '--no-zygote',
-                    '--single-process',
                     '--disable-gpu',
                     '--disable-software-rasterizer'
                 ],
@@ -91,6 +91,7 @@ async function initializeWhatsAppClient() {
         // 🟢 EVENT: Client Ready
         client.on('ready', async () => {
             console.log("🎉 WhatsApp Client is READY to send messages!");
+            isClientReady = true;
             const myNumber = client.info?.wid?.user || 'Unknown';
             await sessionModel.setConnected(myNumber);
         });
@@ -98,6 +99,7 @@ async function initializeWhatsAppClient() {
         // 🟢 EVENT: Disconnected
         client.on('disconnected', async (reason) => {
             console.warn("⚠️ WhatsApp Client disconnected:", reason);
+            isClientReady = false;
             await sessionModel.setDisconnected("Disconnected: " + reason);
             
             // Clean up puppeteer/client state
@@ -117,6 +119,7 @@ async function initializeWhatsAppClient() {
     } catch (error) {
         console.error("❌ Failed to initialize WhatsApp Client:", error);
         await sessionModel.setDisconnected("Init error: " + error.message);
+        isClientReady = false;
         isInitializing = false;
         client = null;
         scheduleReconnect();
@@ -146,7 +149,7 @@ function scheduleReconnect() {
  * @param {string} messageText - Text content
  */
 async function sendMessage(to, messageText) {
-    if (!client) {
+    if (!client || !isClientReady) {
         throw new Error("WhatsApp client not ready. Message postponed.");
     }
 
