@@ -1,3 +1,4 @@
+require('dotenv').config();
 const crypto = require('crypto');
 const axios = require('axios');
 const { connectDB, client } = require('../config/db');
@@ -61,7 +62,7 @@ const DEFAULT_POLICIES = {
 
 function normalizeRoomType(roomType) {
   if (!roomType || typeof roomType !== 'string') {
-    throw new Error('roomType is required');
+    return 'Deluxe'; // Default to Deluxe if missing or invalid
   }
 
   const lookup = roomType.trim().toLowerCase();
@@ -72,7 +73,7 @@ function normalizeRoomType(roomType) {
     suite: 'Suite',
   }[lookup];
 
-  return normalized || roomType.trim();
+  return normalized || 'Deluxe';
 }
 
 function normalizeSubtype(subtype, roomType) {
@@ -607,21 +608,29 @@ function getToolDefinitions() {
 }
 
 async function runTool(toolName, args) {
+  // Normalize arguments (snake_case to camelCase)
+  const normalizedArgs = {};
+  Object.keys(args || {}).forEach(key => {
+    const normalizedKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+    normalizedArgs[normalizedKey] = args[key];
+  });
+
+  // Ensure tool consistency (fallback to camelCase version if snake_case exists in definition)
   switch (toolName) {
     case 'check_availability':
-      return checkAvailability(args);
+      return checkAvailability(normalizedArgs);
     case 'get_room_price':
-      return getRoomPrice(args);
+      return getRoomPrice(normalizedArgs);
     case 'get_room_details':
-      return getRoomDetails(args);
+      return getRoomDetails(normalizedArgs);
     case 'get_policy':
-      return getPolicy(args);
+      return getPolicy(normalizedArgs);
     case 'search_faq':
-      return searchFaq(args);
+      return searchFaq(normalizedArgs);
     case 'create_booking':
-      return createBooking(args);
+      return createBooking(normalizedArgs);
     case 'get_booking_status':
-      return getBookingStatus(args);
+      return getBookingStatus(normalizedArgs);
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
@@ -687,27 +696,28 @@ async function callGemini(messages) {
   }
 
   const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+  
   try {
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
-      {
-        systemInstruction: {
-          parts: [{ text: buildSystemPrompt() }],
-        },
-        contents: toGeminiContents(messages),
-        tools: [getGeminiToolDefinitions()],
-        temperature: 0.2,
+    const payload = {
+      systemInstruction: {
+        parts: [{ text: buildSystemPrompt() }],
       },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-    );
+      contents: toGeminiContents(messages),
+      tools: [getGeminiToolDefinitions()],
+      temperature: 0.2,
+    };
+
+    console.log("📤 Sending to Gemini:", JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(url, payload, {
+      headers: { 'Content-Type': 'application/json' },
+    });
 
     return response.data;
   } catch (error) {
     const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
+    console.error("❌ Gemini API Error:", errorDetail);
     throw new Error(`Gemini request failed: ${errorDetail}`);
   }
 }
@@ -760,7 +770,12 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
 
     if (functionCallPart && functionCallPart.functionCall) {
       const { name, args } = functionCallPart.functionCall;
-      const toolResult = await runTool(name, args || {});
+      let toolResult;
+      try {
+        toolResult = await runTool(name, args || {});
+      } catch (err) {
+        toolResult = { error: err.message };
+      }
 
       conversation.push({
         role: 'assistant',
