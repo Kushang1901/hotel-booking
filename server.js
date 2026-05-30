@@ -14,6 +14,7 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const axios = require("axios");
+const assistantService = require('./src/services/assistantService');
 
 const app = express();
 
@@ -26,16 +27,25 @@ app.use(Sentry.Handlers.requestHandler());
 // 🌐 CORS ALLOWED DOMAINS
 // ----------------------
 app.use(cors({
-    origin: [
-        "https://hoteldevang.com",
-        "https://www.hoteldevang.com",
-        "https://hotel-booking-1-gg1m.onrender.com",
-        "http://localhost:3000",
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-        "http://localhost:5173",
-        "http://localhost:8000"
-    ],
+    origin: (origin, callback) => {
+        const allowedOrigins = [
+            "https://hoteldevang.com",
+            "https://www.hoteldevang.com",
+            "https://hotel-booking-1-gg1m.onrender.com",
+        ];
+
+        if (!origin) {
+            return callback(null, true);
+        }
+
+        const isAllowedLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
+        if (allowedOrigins.includes(origin) || isAllowedLocalOrigin) {
+            return callback(null, true);
+        }
+
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
     credentials: true
@@ -513,6 +523,83 @@ app.post('/api/public/book', async (req, res) => {
         console.error("❌ Public Book API error:", err);
         Sentry.captureException(err);
         res.status(500).json({ error: "Internal server error", details: err.message });
+    }
+});
+
+app.post('/api/check-availability', async (req, res) => {
+    try {
+        const result = await assistantService.checkAvailability(req.body);
+        return res.status(200).json({
+            available: result.available,
+            roomsLeft: result.roomsLeft,
+        });
+    } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/get-room-price', async (req, res) => {
+    try {
+        const result = await assistantService.getRoomPrice(req.body);
+        return res.status(200).json({ price: result.price });
+    } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/get-room-details', async (req, res) => {
+    try {
+        const result = await assistantService.getRoomDetails(req.body);
+        return res.status(200).json({
+            capacity: result.capacity,
+            maxOccupancy: result.maxOccupancy,
+            extraMattressAllowed: result.extraMattressAllowed,
+            extraMattressPrice: result.extraMattressPrice,
+            amenities: result.amenities,
+        });
+    } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/get-policy', async (req, res) => {
+    try {
+        const result = await assistantService.getPolicy(req.body);
+        return res.status(200).json({ value: result.value });
+    } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/create-booking', async (req, res) => {
+    try {
+        const result = await assistantService.createBooking(req.body);
+        return res.status(200).json({ success: true, bookingId: result.bookingId });
+    } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/get-booking-status', async (req, res) => {
+    try {
+        const result = await assistantService.getBookingStatus(req.body);
+        return res.status(200).json({ status: result.status });
+    } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/chat', async (req, res) => {
+    try {
+        const result = await assistantService.generateAssistantReply(req.body || {});
+        return res.status(200).json({
+            success: true,
+            sessionId: result.sessionId,
+            reply: result.reply,
+        });
+    } catch (error) {
+        console.error('❌ Assistant chat error:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 });
 
