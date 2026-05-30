@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const axios = require('axios');
 const { connectDB, client } = require('../config/db');
 
 const DEFAULT_COUNTS = {
@@ -659,7 +660,7 @@ function toGeminiContents(messages) {
         }
 
         return [{
-          role: 'user',
+          role: 'function',
           parts: [{
             functionResponse: {
               name: message.name,
@@ -685,29 +686,30 @@ async function callGemini(messages) {
     throw new Error('GEMINI_API_KEY is not configured');
   }
 
-  const modelName = process.env.GEMINI_MODEL || 'gemini-flash-latest';
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: buildSystemPrompt() }],
+  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+      {
+        systemInstruction: {
+          parts: [{ text: buildSystemPrompt() }],
+        },
+        contents: toGeminiContents(messages),
+        tools: [getGeminiToolDefinitions()],
+        temperature: 0.2,
       },
-      contents: toGeminiContents(messages),
-      tools: [getGeminiToolDefinitions()],
-      temperature: 0.2,
-    }),
-  });
+      {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+    );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini request failed: ${errorText}`);
+    return response.data;
+  } catch (error) {
+    const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
+    throw new Error(`Gemini request failed: ${errorDetail}`);
   }
-
-  return response.json();
 }
 
 async function persistChatTurn({ sessionId, userMessage, botReply }) {
@@ -740,7 +742,7 @@ function getLatestUserMessage(messages, fallbackMessage) {
 }
 
 async function generateAssistantReply({ sessionId, messages = [], userMessage }) {
-  const activeSessionId = sessionId || crypto.randomUUID();
+  const activeSessionId = sessionId || (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString());
   const conversation = Array.isArray(messages) && messages.length > 0
     ? messages.filter((message) => message && (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string')
     : userMessage

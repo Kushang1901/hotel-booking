@@ -600,8 +600,13 @@ app.post('/api/chat', async (req, res) => {
             reply: result.reply,
         });
     } catch (error) {
-        console.error('❌ Assistant chat error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        console.error('❌ Assistant chat error:', error.message);
+        Sentry.captureException(error);
+        return res.status(500).json({ 
+            success: false, 
+            error: "Internal Server Error",
+            message: error.message
+        });
     }
 });
 
