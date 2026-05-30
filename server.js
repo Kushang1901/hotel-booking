@@ -28,10 +28,12 @@ app.use(Sentry.Handlers.requestHandler());
 // ----------------------
 app.use(cors({
     origin: (origin, callback) => {
+        console.log(`[CORS Request] Origin: ${origin}`);
         const allowedOrigins = [
             "https://hoteldevang.com",
             "https://www.hoteldevang.com",
             "https://hotel-booking-1-gg1m.onrender.com",
+            "https://devang-inventory.vercel.app"
         ];
 
         if (!origin) {
