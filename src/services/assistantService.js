@@ -496,8 +496,8 @@ function buildSystemPrompt() {
 
 function getFallbackAssistantReply() {
   return [
-    'I’m having trouble reaching the AI service right now.',
-    'Please ask again in a moment, or I can still help with room availability, booking details, policies, and FAQs.',
+    'Sorry — our AI assistant is temporarily unavailable.',
+    'I can still help with room availability, booking details, hotel policies, or FAQs. Please try again in a few minutes.',
   ].join(' ');
 }
 
