@@ -494,6 +494,13 @@ function buildSystemPrompt() {
   ].join(' ');
 }
 
+function getFallbackAssistantReply() {
+  return [
+    'I’m having trouble reaching the AI service right now.',
+    'Please ask again in a moment, or I can still help with room availability, booking details, policies, and FAQs.',
+  ].join(' ');
+}
+
 function getToolDefinitions() {
   return [
     {
@@ -695,31 +702,52 @@ async function callGemini(messages) {
     throw new Error('GEMINI_API_KEY is not configured');
   }
 
-  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-  
-  try {
-    const payload = {
-      systemInstruction: {
-        parts: [{ text: buildSystemPrompt() }],
-      },
-      contents: toGeminiContents(messages),
-      tools: [getGeminiToolDefinitions()],
+  const payload = {
+    systemInstruction: {
+      parts: [{ text: buildSystemPrompt() }],
+    },
+    contents: toGeminiContents(messages),
+    tools: [getGeminiToolDefinitions()],
+    generationConfig: {
       temperature: 0.2,
-    };
+    },
+  };
+  const modelCandidates = [
+    process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-flash-002',
+  ].filter(Boolean);
 
-    console.log("📤 Sending to Gemini:", JSON.stringify(payload, null, 2));
+  let lastError = null;
 
-    const response = await axios.post(url, payload, {
-      headers: { 'Content-Type': 'application/json' },
-    });
+  for (const modelName of [...new Set(modelCandidates)]) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-    return response.data;
-  } catch (error) {
-    const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
-    console.error("❌ Gemini API Error:", errorDetail);
-    throw new Error(`Gemini request failed: ${errorDetail}`);
+    try {
+      console.log("📤 Sending to Gemini:", JSON.stringify({ modelName, ...payload }, null, 2));
+      const response = await axios.post(url, payload, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      return response.data;
+    } catch (error) {
+      const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
+      lastError = errorDetail;
+      const statusCode = error.response?.status;
+      const isUnsupportedModel = statusCode === 404 && /not found|not supported/i.test(errorDetail);
+
+      console.error("❌ Gemini API Error:", errorDetail);
+
+      if (isUnsupportedModel) {
+        continue;
+      }
+
+      throw new Error(`Gemini request failed: ${errorDetail}`);
+    }
   }
+
+  throw new Error(`Gemini request failed: ${lastError || 'No supported model available'}`);
 }
 
 async function persistChatTurn({ sessionId, userMessage, botReply }) {
@@ -763,7 +791,30 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
 
   while (iterations < 5) {
     iterations += 1;
-    const completion = await callGemini(conversation);
+    let completion;
+
+    try {
+      completion = await callGemini(conversation);
+    } catch (error) {
+      const fallbackReply = getFallbackAssistantReply();
+
+      try {
+        await persistChatTurn({
+          sessionId: activeSessionId,
+          userMessage: getLatestUserMessage(messages, userMessage),
+          botReply: fallbackReply,
+        });
+      } catch (persistError) {
+        console.error('❌ Chat persistence error during fallback:', persistError.message);
+      }
+
+      return {
+        sessionId: activeSessionId,
+        reply: fallbackReply,
+        messages: conversation.slice(1),
+      };
+    }
+
     const candidate = completion?.candidates?.[0];
     const parts = candidate?.content?.parts || [];
     const functionCallPart = parts.find((part) => part.functionCall);
@@ -794,11 +845,15 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
       .map((part) => part.text || '')
       .join('')
       .trim() || 'I could not generate a response right now.';
-    await persistChatTurn({
-      sessionId: activeSessionId,
-      userMessage: getLatestUserMessage(messages, userMessage),
-      botReply: finalReply,
-    });
+    try {
+      await persistChatTurn({
+        sessionId: activeSessionId,
+        userMessage: getLatestUserMessage(messages, userMessage),
+        botReply: finalReply,
+      });
+    } catch (persistError) {
+      console.error('❌ Chat persistence error:', persistError.message);
+    }
 
     return {
       sessionId: activeSessionId,
