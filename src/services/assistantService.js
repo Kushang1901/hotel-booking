@@ -779,6 +779,65 @@ function getLatestUserMessage(messages, fallbackMessage) {
   return '';
 }
 
+function parseDateFromText(text) {
+  if (!text || typeof text !== 'string') return null;
+  // Simple patterns like '5 june', '5th june', '5 june 2026'
+  const months = {
+    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+  };
+
+  const m = text.toLowerCase().match(/(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+(\d{4}))?/i);
+  if (m) {
+    let day = parseInt(m[1], 10);
+    const monAbbr = m[2].toLowerCase();
+    const year = m[3] ? parseInt(m[3], 10) : (new Date()).getFullYear();
+    const fullNames = {
+      jan: 'january', feb: 'february', mar: 'march', apr: 'april', may: 'may', jun: 'june',
+      jul: 'july', aug: 'august', sep: 'september', oct: 'october', nov: 'november', dec: 'december'
+    };
+    const monthName = fullNames[monAbbr];
+    if (!monthName) return null;
+    const month = months[monthName];
+    try {
+      const d = new Date(Date.UTC(year, month, day));
+      if (Number.isNaN(d.getTime())) return null;
+      return d;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // month name then day: 'june 5'
+  const m2 = text.toLowerCase().match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?/i);
+  if (m2) {
+    const monAbbr = m2[1].toLowerCase();
+    let day = parseInt(m2[2], 10);
+    const year = m2[3] ? parseInt(m2[3], 10) : (new Date()).getFullYear();
+    const fullNames = {
+      jan: 'january', feb: 'february', mar: 'march', apr: 'april', may: 'may', jun: 'june',
+      jul: 'july', aug: 'august', sep: 'september', oct: 'october', nov: 'november', dec: 'december'
+    };
+    const monthName = fullNames[monAbbr];
+    const month = months[monthName];
+    try {
+      const d = new Date(Date.UTC(year, month, day));
+      if (Number.isNaN(d.getTime())) return null;
+      return d;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function isAvailabilityQuestion(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lowered = text.toLowerCase();
+  return /available|availability|is there a room|rooms available/.test(lowered) && /\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(lowered);
+}
+
 async function generateAssistantReply({ sessionId, messages = [], userMessage }) {
   const activeSessionId = sessionId || (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString());
   const conversation = Array.isArray(messages) && messages.length > 0
@@ -788,6 +847,48 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
       : [];
 
   let iterations = 0;
+
+  // Quick-path: if the user's latest message looks like an availability question, try to answer directly
+  const latestUser = getLatestUserMessage(messages, userMessage);
+  if (isAvailabilityQuestion(latestUser)) {
+    const checkDate = parseDateFromText(latestUser);
+    if (!checkDate) {
+      // ask for clarification via normal flow
+    } else {
+      try {
+        const types = Object.keys(DEFAULT_COUNTS);
+        const checkIn = checkDate;
+        const checkOut = new Date(checkIn.getTime() + 24 * 60 * 60 * 1000);
+        const results = [];
+        for (const t of types) {
+          try {
+            const avail = await checkAvailability({ roomType: t, checkIn, checkOut });
+            results.push({ roomType: t, available: avail.available, roomsLeft: avail.roomsLeft });
+          } catch (e) {
+            results.push({ roomType: t, error: e.message });
+          }
+        }
+
+        const dateStr = formatIndianDate(checkIn);
+        const parts = results.map(r => {
+          if (r.error) return `${r.roomType}: status unknown`;
+          return `${r.roomType}: ${r.available ? `${r.roomsLeft} room(s) available` : 'No rooms available'}`;
+        });
+
+        const reply = `Availability for ${dateStr}: ` + parts.join('; ');
+        try {
+          await persistChatTurn({ sessionId: activeSessionId, userMessage: latestUser, botReply: reply });
+        } catch (err) {
+          console.error('❌ Chat persistence error in availability quick-path:', err.message);
+        }
+
+        return { sessionId: activeSessionId, reply, messages: conversation.slice(1) };
+      } catch (err) {
+        console.error('❌ Availability quick-path error:', err.message);
+        // fall through to normal flow
+      }
+    }
+  }
 
   while (iterations < 5) {
     iterations += 1;
