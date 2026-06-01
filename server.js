@@ -322,11 +322,25 @@ app.get('/api/public/availability', async (req, res) => {
             }
         });
 
+        // Fetch blocked dates overlapping with the selected range
+        const blockedDatesCollection = db.collection("blockeddates");
+        const overlappingBlocks = await blockedDatesCollection.find({
+            startDate: { $lt: checkOutDate },
+            endDate: { $gte: checkInDate }
+        }).toArray();
+
+        const isHotelFullyBlocked = overlappingBlocks.some(block => block.roomType === 'All' || block.roomType === 'all');
+        const blockedRoomTypes = new Set(
+            overlappingBlocks
+                .filter(block => block.roomType !== 'All' && block.roomType !== 'all')
+                .map(block => block.roomType)
+        );
+
         const availability = {
-            Standard: Math.max(0, totalCounts.Standard - bookedCounts.Standard),
-            Deluxe: Math.max(0, totalCounts.Deluxe - bookedCounts.Deluxe),
-            "Super Deluxe": Math.max(0, totalCounts["Super Deluxe"] - bookedCounts["Super Deluxe"]),
-            Suite: Math.max(0, totalCounts.Suite - bookedCounts.Suite)
+            Standard: (isHotelFullyBlocked || blockedRoomTypes.has("Standard")) ? 0 : Math.max(0, totalCounts.Standard - bookedCounts.Standard),
+            Deluxe: (isHotelFullyBlocked || blockedRoomTypes.has("Deluxe")) ? 0 : Math.max(0, totalCounts.Deluxe - bookedCounts.Deluxe),
+            "Super Deluxe": (isHotelFullyBlocked || blockedRoomTypes.has("Super Deluxe")) ? 0 : Math.max(0, totalCounts["Super Deluxe"] - bookedCounts["Super Deluxe"]),
+            Suite: (isHotelFullyBlocked || blockedRoomTypes.has("Suite")) ? 0 : Math.max(0, totalCounts.Suite - bookedCounts.Suite)
         };
 
         res.status(200).json({
