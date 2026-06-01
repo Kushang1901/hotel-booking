@@ -734,6 +734,8 @@ async function callGemini(messages) {
   const modelCandidates = [
     process.env.GEMINI_MODEL,
     'gemini-2.0-flash',
+    'gemini-flash-latest',
+    'gemini-pro-latest',
     'gemini-1.5-flash-latest',
     'gemini-1.5-flash-002',
   ].filter(Boolean);
@@ -754,11 +756,14 @@ async function callGemini(messages) {
       const errorDetail = error.response ? JSON.stringify(error.response.data) : error.message;
       lastError = errorDetail;
       const statusCode = error.response?.status;
-      const isUnsupportedModel = statusCode === 404 && /not found|not supported/i.test(errorDetail);
+      
+      console.error(`❌ Gemini API Error for model ${modelName}:`, errorDetail);
 
-      console.error("❌ Gemini API Error:", errorDetail);
+      // Self-healing: if model is unsupported (404), rate-limited (429), or experiencing a temporary spike (503), continue to other candidates
+      const shouldFallback = statusCode === 404 || statusCode === 429 || statusCode === 503;
 
-      if (isUnsupportedModel) {
+      if (shouldFallback) {
+        console.warn(`🔄 Falling back from model ${modelName} due to status ${statusCode}`);
         continue;
       }
 
