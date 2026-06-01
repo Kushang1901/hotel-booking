@@ -880,6 +880,73 @@ function isAvailabilityQuestion(text) {
   return hasKeywords && hasDatePattern;
 }
 
+async function getLocalPricesReply() {
+  return [
+    `🙏 Greetings from **Hotel Devang Dwarka**! Here are the standard nightly rates for our rooms:`,
+    ``,
+    `🛏️ **Standard Room**`,
+    `• **AC**: ₹1,400 per night`,
+    `• **Non-AC**: ₹1,100 per night`,
+    ``,
+    `🛏️ **Deluxe Room**`,
+    `• **AC**: ₹1,700 per night`,
+    `• **Non-AC**: ₹1,400 per night`,
+    ``,
+    `🛏️ **Super Deluxe Room**`,
+    `• **AC**: ₹1,900 per night`,
+    `• **Non-AC**: ₹1,600 per night`,
+    ``,
+    `🛏️ **Suite Room**`,
+    `• **AC**: ₹3,000 per night`,
+    ``,
+    `*Note: Stated prices are standard nightly rates. Would you like me to assist you in booking a room or checking live availability?*`
+  ].join('\n');
+}
+
+async function getLocalPolicyReply(text) {
+  const lowered = text.toLowerCase();
+  let policyKey = '';
+  if (lowered.includes('checkin') || lowered.includes('check-in')) policyKey = 'checkin';
+  else if (lowered.includes('checkout') || lowered.includes('check-out')) policyKey = 'checkout';
+  else if (lowered.includes('cancel')) policyKey = 'cancellation';
+  else if (lowered.includes('parking')) policyKey = 'parking';
+  else if (lowered.includes('wifi') || lowered.includes('internet')) policyKey = 'wifi';
+  else if (lowered.includes('id ') || lowered.includes('proof') || lowered.includes('card') || lowered.includes('identity')) policyKey = 'id';
+
+  if (policyKey) {
+    try {
+      const res = await getPolicy({ policy: policyKey });
+      if (res && res.value) {
+        return `🙏 **Hotel Devang Policies** - *${res.policy}*:\n\n${res.value}\n\nIs there anything else I can help you with?`;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function getLocalFaqReply(text) {
+  try {
+    const res = await searchFaq({ query: text });
+    if (res && res.answer && res.answer !== 'No matching FAQ was found in the hotel database.') {
+      return `🙏 **Frequently Asked Question**:\n\n**Q: ${res.question}**\n**A:** ${res.answer}\n\nIs there anything else I can help you with?`;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function getFriendlyFallbackReply() {
+  return [
+    `🙏 Thank you for contacting **Hotel Devang Dwarka**!`,
+    ``,
+    `Our automated AI assistant is currently performing a brief update, but I can still assist you with:`,
+    `✅ **Live room availability** (e.g., *"is room available on 6th june ?"*)`,
+    `✅ **Standard room prices** (e.g., *"room rates"*)`,
+    `✅ **Hotel policies** (e.g., *"checkin time"*)`,
+    ``,
+    `📞 For urgent bookings, cancellations, or direct support, please connect with our reception desk directly at **+91 98244 02132**.`
+  ].join('\n');
+}
+
 async function generateAssistantReply({ sessionId, messages = [], userMessage }) {
   const activeSessionId = sessionId || (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString());
   const conversation = Array.isArray(messages) && messages.length > 0
@@ -957,12 +1024,36 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
     try {
       completion = await callGemini(conversation);
     } catch (error) {
-      const fallbackReply = getFallbackAssistantReply();
+      console.error('❌ Gemini main assistant call failed:', error.message);
+      
+      let fallbackReply = '';
+      const loweredUser = latestUser.toLowerCase();
+
+      // 1. Check for pricing queries
+      if (/price|rate|cost|charge|tariff|rent|amount|proice|pricing|fare/i.test(loweredUser)) {
+        fallbackReply = await getLocalPricesReply();
+      } 
+      // 2. Check for policies queries
+      else if (/checkin|check-in|checkout|check-out|timing|time|cancel|policy|parking|wifi|internet|id|proof|card|identity/i.test(loweredUser)) {
+        const policyRes = await getLocalPolicyReply(latestUser);
+        if (policyRes) fallbackReply = policyRes;
+      }
+
+      // 3. Check FAQs if still empty
+      if (!fallbackReply) {
+        const faqRes = await getLocalFaqReply(latestUser);
+        if (faqRes) fallbackReply = faqRes;
+      }
+
+      // 4. Fallback to highly helpful customer guide bubble
+      if (!fallbackReply) {
+        fallbackReply = getFriendlyFallbackReply();
+      }
 
       try {
         await persistChatTurn({
           sessionId: activeSessionId,
-          userMessage: getLatestUserMessage(messages, userMessage),
+          userMessage: latestUser,
           botReply: fallbackReply,
         });
       } catch (persistError) {
@@ -972,7 +1063,7 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
       return {
         sessionId: activeSessionId,
         reply: fallbackReply,
-        messages: conversation.slice(1),
+        messages: conversation.slice(1)
       };
     }
 
