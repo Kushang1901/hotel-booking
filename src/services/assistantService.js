@@ -135,6 +135,7 @@ async function getCollections() {
     chatSessions: db.collection('chat_sessions'),
     roomPrices: db.collection('room_prices'),
     seasonalPrices: db.collection('seasonal_prices'),
+    blockedDates: db.collection('blockeddates'),
   };
 }
 
@@ -208,7 +209,25 @@ async function checkAvailability({ roomType, checkIn, checkOut }) {
   const activeBookings = await getActiveBookings(checkInDate, checkOutDate);
   const bookedCounts = countBookings(activeBookings);
 
-  const roomsLeft = Math.max(0, (totalCounts[normalizedRoomType] || 0) - (bookedCounts[normalizedRoomType] || 0));
+  // 1. Fetch blocked dates overlapping with the selected range
+  const { blockedDates } = await getCollections();
+  const overlappingBlocks = await blockedDates.find({
+    startDate: { $lt: checkOutDate },
+    endDate: { $gte: checkInDate }
+  }).toArray();
+
+  const isHotelFullyBlocked = overlappingBlocks.some(block => block.roomType === 'All' || block.roomType === 'all');
+  const blockedRoomTypes = new Set(
+    overlappingBlocks
+      .filter(block => block.roomType !== 'All' && block.roomType !== 'all')
+      .map(block => normalizeRoomType(block.roomType))
+  );
+
+  let roomsLeft = Math.max(0, (totalCounts[normalizedRoomType] || 0) - (bookedCounts[normalizedRoomType] || 0));
+
+  if (isHotelFullyBlocked || blockedRoomTypes.has(normalizedRoomType)) {
+    roomsLeft = 0;
+  }
 
   return {
     available: roomsLeft > 0,
@@ -781,51 +800,67 @@ function getLatestUserMessage(messages, fallbackMessage) {
 
 function parseDateFromText(text) {
   if (!text || typeof text !== 'string') return null;
-  // Simple patterns like '5 june', '5th june', '5 june 2026'
   const months = {
     january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
     july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
   };
 
-  const m = text.toLowerCase().match(/(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+(\d{4}))?/i);
-  if (m) {
-    let day = parseInt(m[1], 10);
-    const monAbbr = m[2].toLowerCase();
-    const year = m[3] ? parseInt(m[3], 10) : (new Date()).getFullYear();
-    const fullNames = {
-      jan: 'january', feb: 'february', mar: 'march', apr: 'april', may: 'may', jun: 'june',
-      jul: 'july', aug: 'august', sep: 'september', oct: 'october', nov: 'november', dec: 'december'
-    };
-    const monthName = fullNames[monAbbr];
-    if (!monthName) return null;
-    const month = months[monthName];
-    try {
-      const d = new Date(Date.UTC(year, month, day));
-      if (Number.isNaN(d.getTime())) return null;
-      return d;
-    } catch (e) {
-      return null;
+  const lowered = text.toLowerCase();
+
+  // 1. Matches DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY
+  // Example: 05-06-2026, 5/6/2026, 5/6
+  const mNumeric = lowered.match(/\b(\d{1,2})[-/\.](\d{1,2})(?:[-/\.](\d{2,4}))?\b/);
+  if (mNumeric) {
+    let day = parseInt(mNumeric[1], 10);
+    let month = parseInt(mNumeric[2], 10) - 1; // 0-indexed
+    let year = mNumeric[3] ? parseInt(mNumeric[3], 10) : (new Date()).getFullYear();
+    if (year < 100) year += 2000; // handle 2-digit years
+    
+    if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+      try {
+        const d = new Date(Date.UTC(year, month, day));
+        if (!isNaN(d.getTime())) return d;
+      } catch (e) {}
     }
   }
 
-  // month name then day: 'june 5'
-  const m2 = text.toLowerCase().match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?/i);
-  if (m2) {
-    const monAbbr = m2[1].toLowerCase();
-    let day = parseInt(m2[2], 10);
-    const year = m2[3] ? parseInt(m2[3], 10) : (new Date()).getFullYear();
+  // 2. Matches "5th of june", "5 june", "5th june 2026"
+  const mDayMonth = lowered.match(/(\d{1,2})(?:st|nd|rd|th)?\s*(?:of)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+(\d{4}))?/i);
+  if (mDayMonth) {
+    let day = parseInt(mDayMonth[1], 10);
+    const monAbbr = mDayMonth[2].toLowerCase();
+    const year = mDayMonth[3] ? parseInt(mDayMonth[3], 10) : (new Date()).getFullYear();
     const fullNames = {
       jan: 'january', feb: 'february', mar: 'march', apr: 'april', may: 'may', jun: 'june',
       jul: 'july', aug: 'august', sep: 'september', oct: 'october', nov: 'november', dec: 'december'
     };
     const monthName = fullNames[monAbbr];
-    const month = months[monthName];
-    try {
-      const d = new Date(Date.UTC(year, month, day));
-      if (Number.isNaN(d.getTime())) return null;
-      return d;
-    } catch (e) {
-      return null;
+    if (monthName && months[monthName] !== undefined) {
+      const month = months[monthName];
+      try {
+        const d = new Date(Date.UTC(year, month, day));
+        if (!isNaN(d.getTime())) return d;
+      } catch (e) {}
+    }
+  }
+
+  // 3. Matches "june 5", "june 5th", "june 5th 2026"
+  const mMonthDay = lowered.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?/i);
+  if (mMonthDay) {
+    const monAbbr = mMonthDay[1].toLowerCase();
+    let day = parseInt(mMonthDay[2], 10);
+    const year = mMonthDay[3] ? parseInt(mMonthDay[3], 10) : (new Date()).getFullYear();
+    const fullNames = {
+      jan: 'january', feb: 'february', mar: 'march', apr: 'april', may: 'may', jun: 'june',
+      jul: 'july', aug: 'august', sep: 'september', oct: 'october', nov: 'november', dec: 'december'
+    };
+    const monthName = fullNames[monAbbr];
+    if (monthName && months[monthName] !== undefined) {
+      const month = months[monthName];
+      try {
+        const d = new Date(Date.UTC(year, month, day));
+        if (!isNaN(d.getTime())) return d;
+      } catch (e) {}
     }
   }
 
@@ -835,7 +870,9 @@ function parseDateFromText(text) {
 function isAvailabilityQuestion(text) {
   if (!text || typeof text !== 'string') return false;
   const lowered = text.toLowerCase();
-  return /available|availability|is there a room|rooms available/.test(lowered) && /\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(lowered);
+  const hasKeywords = /avail|is there a room|rooms left|rooms free|vacan|any room|rooms for|book|stay/i.test(lowered);
+  const hasDatePattern = /\b\d{1,2}\b|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(lowered);
+  return hasKeywords && hasDatePattern;
 }
 
 async function generateAssistantReply({ sessionId, messages = [], userMessage }) {
@@ -870,12 +907,30 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
         }
 
         const dateStr = formatIndianDate(checkIn);
-        const parts = results.map(r => {
-          if (r.error) return `${r.roomType}: status unknown`;
-          return `${r.roomType}: ${r.available ? `${r.roomsLeft} room(s) available` : 'No rooms available'}`;
+        let reply = `🙏 Greetings from **Hotel Devang Dwarka**! Here is the live room availability for **${dateStr}**:\n\n`;
+        
+        let allSoldOut = true;
+        results.forEach(r => {
+          if (!r.error && r.available) {
+            allSoldOut = false;
+          }
         });
 
-        const reply = `Availability for ${dateStr}: ` + parts.join('; ');
+        if (allSoldOut) {
+          reply += `⚠️ We are sorry, but all our rooms are fully booked for this date. Please contact our reception at **+91 98244 02132** for cancellation queries or to check alternative dates.`;
+        } else {
+          results.forEach(r => {
+            if (r.error) {
+              reply += `• **${r.roomType}**: Status unknown (${r.error})\n`;
+            } else if (r.available) {
+              reply += `✅ **${r.roomType}**: ${r.roomsLeft} room${r.roomsLeft > 1 ? 's' : ''} available\n`;
+            } else {
+              reply += `❌ **${r.roomType}**: Fully booked / Sold out\n`;
+            }
+          });
+          reply += `\nWould you like me to assist you in making a booking for **${dateStr}**?`;
+        }
+
         try {
           await persistChatTurn({ sessionId: activeSessionId, userMessage: latestUser, botReply: reply });
         } catch (err) {
