@@ -147,6 +147,13 @@ async function getTotalRoomCounts() {
     return { ...DEFAULT_COUNTS };
   }
 
+  const initialCounts = {
+    Standard: 0,
+    Deluxe: 0,
+    'Super Deluxe': 0,
+    Suite: 0,
+  };
+
   return records.reduce((counts, room) => {
     const type = normalizeRoomType(room.roomType || room.type || '');
 
@@ -155,7 +162,7 @@ async function getTotalRoomCounts() {
     }
 
     return counts;
-  }, { ...DEFAULT_COUNTS });
+  }, initialCounts);
 }
 
 async function getActiveBookings(checkInDate, checkOutDate) {
@@ -880,6 +887,185 @@ function isAvailabilityQuestion(text) {
   return hasKeywords && hasDatePattern;
 }
 
+async function getLocalCalendarReply(text) {
+  const lowered = text.toLowerCase();
+  
+  // 1. Detect which room type is queried (fallback to Standard)
+  let roomType = 'Standard';
+  if (lowered.includes('deluxe') && !lowered.includes('super')) roomType = 'Deluxe';
+  else if (lowered.includes('super deluxe')) roomType = 'Super Deluxe';
+  else if (lowered.includes('suite')) roomType = 'Suite';
+  else if (lowered.includes('standard')) roomType = 'Standard';
+
+  // 2. Determine target month and year (default to June 2026 or current month if no match)
+  let targetMonth = 5; // June (0-indexed)
+  let targetYear = 2026;
+  
+  const now = new Date();
+  if (lowered.includes('june') || lowered.includes('jun')) targetMonth = 5;
+  else if (lowered.includes('july') || lowered.includes('jul')) targetMonth = 6;
+  else if (lowered.includes('august') || lowered.includes('aug')) targetMonth = 7;
+  else if (lowered.includes('september') || lowered.includes('sep')) targetMonth = 8;
+  else {
+    if (now.getFullYear() > 2026 || (now.getFullYear() === 2026 && now.getMonth() >= 5)) {
+      targetMonth = now.getMonth();
+      targetYear = now.getFullYear();
+    } else {
+      targetMonth = 5; // June
+      targetYear = 2026;
+    }
+  }
+
+  // 3. Fetch all blocked dates and active bookings for this month
+  const startOfMonth = new Date(Date.UTC(targetYear, targetMonth, 1));
+  const endOfMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999));
+  
+  const { blockedDates } = await getCollections();
+  const blocks = await blockedDates.find({
+    startDate: { $lte: endOfMonth },
+    endDate: { $gte: startOfMonth }
+  }).toArray();
+
+  const totalDays = endOfMonth.getUTCDate();
+  const totalCounts = await getTotalRoomCounts();
+  const roomCapacity = totalCounts[normalizeRoomType(roomType)] || 0;
+
+  // Initialize booked count for each day
+  const dailyBookedCounts = {};
+  for (let d = 1; d <= totalDays; d++) {
+    dailyBookedCounts[d] = 0;
+  }
+
+  // A. Add administrative block dates
+  blocks.forEach(block => {
+    const isAllBlock = block.roomType === 'All' || block.roomType === 'all';
+    const isMatchingType = normalizeRoomType(block.roomType) === normalizeRoomType(roomType);
+    
+    if (isAllBlock || isMatchingType) {
+      const blockStart = new Date(block.startDate);
+      const blockEnd = new Date(block.endDate);
+      
+      const startDay = blockStart < startOfMonth ? 1 : blockStart.getUTCDate();
+      const endDay = blockEnd > endOfMonth ? totalDays : blockEnd.getUTCDate();
+      
+      for (let d = startDay; d <= endDay; d++) {
+        dailyBookedCounts[d] = roomCapacity; // Mark fully blocked
+      }
+    }
+  });
+
+  // B. Add active bookings overlapping with the month
+  const activeBookings = await getActiveBookings(startOfMonth, endOfMonth);
+  activeBookings.forEach(booking => {
+    let quantity = 0;
+    if (Array.isArray(booking.rooms) && booking.rooms.length > 0) {
+      booking.rooms.forEach(room => {
+        if (normalizeRoomType(room.roomType) === normalizeRoomType(roomType)) {
+          quantity += Number(room.quantity) || 1;
+        }
+      });
+    } else if (booking.roomType && normalizeRoomType(booking.roomType) === normalizeRoomType(roomType)) {
+      quantity += 1;
+    }
+
+    if (quantity > 0) {
+      const bStart = new Date(booking.checkIn);
+      const bEnd = new Date(booking.checkOut);
+      
+      const startDay = bStart < startOfMonth ? 1 : bStart.getUTCDate();
+      const endDay = bEnd > endOfMonth ? totalDays : Math.max(1, bEnd.getUTCDate() - 1);
+      
+      for (let d = startDay; d <= endDay; d++) {
+        if (d >= 1 && d <= totalDays) {
+          dailyBookedCounts[d] = (dailyBookedCounts[d] || 0) + quantity;
+        }
+      }
+    }
+  });
+
+  // C. Build set of blocked/fully booked days
+  const blockedDays = new Set();
+  for (let d = 1; d <= totalDays; d++) {
+    if (dailyBookedCounts[d] >= roomCapacity) {
+      blockedDays.add(d);
+    }
+  }
+
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  const monthName = monthNames[targetMonth];
+
+  let reply = `📅 **Live Calendar for ${roomType} Rooms (${monthName} ${targetYear})**:\n\n`;
+
+  if (blockedDays.size === 0) {
+    reply += `✨ Great news! All dates in **${monthName}** are currently fully available for **${roomType}** rooms! ✅`;
+  } else if (blockedDays.size === totalDays) {
+    reply += `⚠️ Note: All dates in **${monthName}** are currently administrative blocked or fully booked for **${roomType}** rooms. ❌`;
+  } else {
+    // Group available ranges
+    const availableRanges = [];
+    let rangeStart = null;
+
+    for (let d = 1; d <= totalDays; d++) {
+      const isAvailable = !blockedDays.has(d);
+      if (isAvailable) {
+        if (rangeStart === null) {
+          rangeStart = d;
+        }
+      } else {
+        if (rangeStart !== null) {
+          availableRanges.push({ start: rangeStart, end: d - 1 });
+          rangeStart = null;
+        }
+      }
+    }
+    if (rangeStart !== null) {
+      availableRanges.push({ start: rangeStart, end: totalDays });
+    }
+
+    reply += `✅ **Available Dates**:\n`;
+    availableRanges.forEach(r => {
+      if (r.start === r.end) {
+        reply += `• **${r.start} ${monthName}**\n`;
+      } else {
+        reply += `• **${r.start} to ${r.end} ${monthName}**\n`;
+      }
+    });
+
+    reply += `\n❌ **Blocked / Fully Booked Dates**:\n`;
+    const blockedRanges = [];
+    let bStart = null;
+    for (let d = 1; d <= totalDays; d++) {
+      const isBlocked = blockedDays.has(d);
+      if (isBlocked) {
+        if (bStart === null) {
+          bStart = d;
+        }
+      } else {
+        if (bStart !== null) {
+          blockedRanges.push({ start: bStart, end: d - 1 });
+          bStart = null;
+        }
+      }
+    }
+    if (bStart !== null) {
+      blockedRanges.push({ start: bStart, end: totalDays });
+    }
+    blockedRanges.forEach(r => {
+      if (r.start === r.end) {
+        reply += `• ${r.start} ${monthName}\n`;
+      } else {
+        reply += `• ${r.start} to ${r.end} ${monthName}\n`;
+      }
+    });
+  }
+
+  reply += `\nWould you like me to assist you with a booking for any of these dates?`;
+  return reply;
+}
+
 async function getLocalPricesReply() {
   return [
     `🙏 Greetings from **Hotel Devang Dwarka**! Here are the standard nightly rates for our rooms:`,
@@ -1029,11 +1215,15 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
       let fallbackReply = '';
       const loweredUser = latestUser.toLowerCase();
 
-      // 1. Check for pricing queries
-      if (/price|rate|cost|charge|tariff|rent|amount|proice|pricing|fare/i.test(loweredUser)) {
+      // 1. Check for calendar availability queries
+      if (/date|calendar|when|which day|open day/i.test(loweredUser) && /avail|free|vacan|block|open/i.test(loweredUser)) {
+        fallbackReply = await getLocalCalendarReply(latestUser);
+      }
+      // 2. Check for pricing queries
+      else if (/price|rate|cost|charge|tariff|rent|amount|proice|pricing|fare/i.test(loweredUser)) {
         fallbackReply = await getLocalPricesReply();
       } 
-      // 2. Check for policies queries
+      // 3. Check for policies queries
       else if (/checkin|check-in|checkout|check-out|timing|time|cancel|policy|parking|wifi|internet|id|proof|card|identity/i.test(loweredUser)) {
         const policyRes = await getLocalPolicyReply(latestUser);
         if (policyRes) fallbackReply = policyRes;
