@@ -12,7 +12,6 @@ Sentry.init({
 
 const express = require('express');
 const cors = require('cors');
-const { MongoClient } = require('mongodb');
 const axios = require("axios");
 const assistantService = require('./src/services/assistantService');
 
@@ -60,24 +59,19 @@ const whatsappRoutes = require('./src/routes/whatsappRoutes');
 app.use(whatsappRoutes);
 
 // ----------------------
-// 🗃 MONGODB CONNECTION
+// 🗃 PRISMA/MONGODB CONNECTION
 // ----------------------
 const db = require('./src/config/db');
-const client = db.client; // Retain client for backwards compatibility in other routes
-let bookings;
-let visitorSessions; 
+const { prisma } = db;
+let isDbConnected = false;
 
 // ----------------------
 // 🚀 START SERVER AND CONNECT DB
 // ----------------------
 async function startServer() {
     try {
-        const database = await db.connectDB();
-
-        bookings = database.collection("bookings");
-        visitorSessions = database.collection("visitor_sessions"); 
-
-        console.log("✅ Connected to MongoDB Atlas via shared DB module");
+        await db.connectDB();
+        isDbConnected = true;
 
         // 📞 WhatsApp Service and Retry Scheduler Initialization
         const whatsappService = require('./src/services/whatsappService');
@@ -109,10 +103,10 @@ app.get('/', (req, res) => {
 
 // 📘 Get All Bookings
 app.get('/api/book', async (req, res) => {
-    if (!bookings) return res.status(503).json({ success: false, error: "DB not ready" });
+    if (!isDbConnected) return res.status(503).json({ success: false, error: "DB not ready" });
 
     try {
-        const allBookings = await bookings.find().toArray();
+        const allBookings = await prisma.booking.findMany();
         res.status(200).json({ success: true, data: allBookings });
     } catch (err) {
         console.error("❌ Error fetching bookings:", err);
@@ -125,7 +119,7 @@ app.get('/api/book', async (req, res) => {
 app.post('/api/book', async (req, res) => {
     console.log("📥 Received booking request:", req.body);
 
-    if (!bookings)
+    if (!isDbConnected)
         return res.status(503).json({ success: false, error: 'Server initializing, try again' });
 
     try {
@@ -186,12 +180,14 @@ app.post('/api/book', async (req, res) => {
         };
 
         // 🚫 4️⃣ Prevent Duplicate Bookings
-        const existing = await bookings.findOne({
-            guest_name: bookingData.guest_name,
-            contact: bookingData.contact,
-            check_in: bookingData.check_in,
-            check_out: bookingData.check_out,
-            room_type: bookingData.room_type
+        const existing = await prisma.booking.findFirst({
+            where: {
+                guest_name: bookingData.guest_name,
+                contact: bookingData.contact,
+                check_in: bookingData.check_in,
+                check_out: bookingData.check_out,
+                room_type: bookingData.room_type
+            }
         });
 
         if (existing) {
@@ -203,13 +199,13 @@ app.post('/api/book', async (req, res) => {
         }
 
         // ✅ 5️⃣ Save Booking
-        const result = await bookings.insertOne(bookingData);
-        console.log("✅ Booking saved:", result.insertedId);
+        const result = await prisma.booking.create({ data: bookingData });
+        console.log("✅ Booking saved:", result.id);
 
         // 📞 Send WhatsApp Notification to Owner
         const whatsappService = require('./src/services/whatsappService');
         whatsappService.sendBookingNotificationToOwner({
-            bookingId: result.insertedId.toString(),
+            bookingId: result.id.toString(),
             guestName: bookingData.guest_name,
             phone: bookingData.contact,
             roomType: bookingData.room_type,
@@ -226,7 +222,7 @@ app.post('/api/book', async (req, res) => {
 
         res.status(200).json({
             success: true,
-            id: result.insertedId
+            id: result.id
         });
 
     } catch (err) {
@@ -242,13 +238,15 @@ app.post('/api/log-session', async (req, res) => {
     try {
         const { sessionId, page, eventType, timestamp } = req.body;
 
-        await visitorSessions.insertOne({
-            sessionId,
-            page,
-            eventType, // "page_visit" or "page_exit"
-            timestamp: new Date(timestamp),
-            userAgent: req.headers['user-agent'],
-            ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress
+        await prisma.visitorSession.create({
+            data: {
+                sessionId,
+                page,
+                eventType, // "page_visit" or "page_exit"
+                timestamp: new Date(timestamp),
+                userAgent: req.headers['user-agent'],
+                ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress
+            }
         });
 
         res.status(200).json({ success: true, message: "Session logged" });
@@ -281,9 +279,7 @@ app.get('/api/public/availability', async (req, res) => {
         }
 
         // Fetch physical rooms. If not seeded, fallback to default physical room layout.
-        const db = client.db("hotel_devang");
-        const roomsCollection = db.collection("rooms");
-        const rooms = await roomsCollection.find({}).toArray();
+        const rooms = await prisma.room.findMany();
 
         let totalCounts = {
             Standard: 2,
@@ -302,11 +298,13 @@ app.get('/api/public/availability', async (req, res) => {
         }
 
         // Count overlapping active bookings
-        const activeOverlappingBookings = await bookings.find({
-            bookingStatus: { $ne: "Cancelled" },
-            checkIn: { $lt: checkOutDate },
-            checkOut: { $gt: checkInDate }
-        }).toArray();
+        const activeOverlappingBookings = await prisma.booking.findMany({
+            where: {
+                bookingStatus: { not: "Cancelled" },
+                checkIn: { lt: checkOutDate },
+                checkOut: { gt: checkInDate }
+            }
+        });
 
         const bookedCounts = {
             Standard: 0,
@@ -323,11 +321,12 @@ app.get('/api/public/availability', async (req, res) => {
         });
 
         // Fetch blocked dates overlapping with the selected range
-        const blockedDatesCollection = db.collection("blockeddates");
-        const overlappingBlocks = await blockedDatesCollection.find({
-            startDate: { $lt: checkOutDate },
-            endDate: { $gte: checkInDate }
-        }).toArray();
+        const overlappingBlocks = await prisma.blockedDate.findMany({
+            where: {
+                startDate: { lt: checkOutDate },
+                endDate: { gte: checkInDate }
+            }
+        });
 
         const isHotelFullyBlocked = overlappingBlocks.some(block => block.roomType === 'All' || block.roomType === 'all');
         const blockedRoomTypes = new Set(
@@ -404,12 +403,14 @@ app.post('/api/public/book', async (req, res) => {
         }
 
         // Prevent Duplicate Bookings
-        const existing = await bookings.findOne({
-            guestName,
-            phone,
-            checkIn: checkInDate,
-            checkOut: checkOutDate,
-            roomType
+        const existing = await prisma.booking.findFirst({
+            where: {
+                guestName,
+                phone,
+                checkIn: checkInDate,
+                checkOut: checkOutDate,
+                roomType
+            }
         });
 
         if (existing) {
@@ -420,19 +421,21 @@ app.post('/api/public/book', async (req, res) => {
         }
 
         // Auto Room Allocation: find overlapping active bookings for this roomType
-        const overlappingBookings = await bookings.find({
-            roomType,
-            bookingStatus: { $ne: "Cancelled" },
-            checkIn: { $lt: checkOutDate },
-            checkOut: { $gt: checkInDate }
-        }).toArray();
+        const overlappingBookings = await prisma.booking.findMany({
+            where: {
+                roomType,
+                bookingStatus: { not: "Cancelled" },
+                checkIn: { lt: checkOutDate },
+                checkOut: { gt: checkInDate }
+            }
+        });
 
         const occupiedRooms = overlappingBookings.map((b) => b.assignedRoom);
 
         // Fetch physical rooms from MongoDB
-        const db = client.db("hotel_devang");
-        const roomsCollection = db.collection("rooms");
-        const roomsOfType = await roomsCollection.find({ roomType }).toArray();
+        const roomsOfType = await prisma.room.findMany({
+            where: { roomType }
+        });
         let availableRooms = roomsOfType.filter((r) => !occupiedRooms.includes(r.roomNumber));
 
         let assignedRoom = "TBD";
@@ -523,7 +526,9 @@ app.post('/api/public/book', async (req, res) => {
             updatedAt: new Date()
         };
 
-        await bookings.insertOne(newBooking);
+        await prisma.booking.create({
+            data: newBooking
+        });
 
         // 📞 Send WhatsApp Notification to Owner
         const whatsappService = require('./src/services/whatsappService');

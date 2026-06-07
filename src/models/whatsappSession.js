@@ -1,4 +1,4 @@
-const { getCollection } = require('../config/db');
+const { prisma } = require('../config/db');
 
 const CLIENT_ID = 'hotel-devang';
 
@@ -8,8 +8,9 @@ const CLIENT_ID = 'hotel-devang';
  */
 async function getSession() {
     try {
-        const collection = getCollection('whatsapp_sessions');
-        return await collection.findOne({ clientId: CLIENT_ID });
+        return await prisma.whatsAppSession.findUnique({
+            where: { clientId: CLIENT_ID }
+        });
     } catch (error) {
         console.error("❌ Error in getSession:", error);
         return null;
@@ -22,26 +23,21 @@ async function getSession() {
  */
 async function updateSession(updateData) {
     try {
-        const collection = getCollection('whatsapp_sessions');
         const now = new Date();
         
-        const result = await collection.findOneAndUpdate(
-            { clientId: CLIENT_ID },
-            { 
-                $set: { 
-                    ...updateData, 
-                    updatedAt: now 
-                },
-                $setOnInsert: {
-                    createdAt: now
-                }
+        return await prisma.whatsAppSession.upsert({
+            where: { clientId: CLIENT_ID },
+            update: { 
+                ...updateData, 
+                updatedAt: now 
             },
-            { 
-                upsert: true,
-                returnDocument: 'after'
+            create: {
+                clientId: CLIENT_ID,
+                ...updateData,
+                createdAt: now,
+                updatedAt: now
             }
-        );
-        return result;
+        });
     } catch (error) {
         console.error("❌ Error in updateSession:", error);
         throw error;

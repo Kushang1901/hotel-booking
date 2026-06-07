@@ -1,7 +1,7 @@
 require('dotenv').config();
 const crypto = require('crypto');
 const axios = require('axios');
-const { connectDB, client } = require('../config/db');
+const { prisma } = require('../config/db');
 
 const DEFAULT_COUNTS = {
   Standard: 2,
@@ -117,31 +117,8 @@ function buildBookingId(checkInDate) {
   return `HD${datePart}${randomPart}`;
 }
 
-async function getDatabase() {
-  await connectDB();
-  return client.db('hotel_devang');
-}
-
-async function getCollections() {
-  const db = await getDatabase();
-
-  return {
-    db,
-    rooms: db.collection('rooms'),
-    bookings: db.collection('bookings'),
-    policies: db.collection('hotel_policies'),
-    roomInformation: db.collection('room_information'),
-    faq: db.collection('faq'),
-    chatSessions: db.collection('chat_sessions'),
-    roomPrices: db.collection('room_prices'),
-    seasonalPrices: db.collection('seasonal_prices'),
-    blockedDates: db.collection('blockeddates'),
-  };
-}
-
 async function getTotalRoomCounts() {
-  const { rooms } = await getCollections();
-  const records = await rooms.find({}).toArray();
+  const records = await prisma.room.findMany();
 
   if (records.length === 0) {
     return { ...DEFAULT_COUNTS };
@@ -166,13 +143,13 @@ async function getTotalRoomCounts() {
 }
 
 async function getActiveBookings(checkInDate, checkOutDate) {
-  const { bookings } = await getCollections();
-
-  return bookings.find({
-    bookingStatus: { $ne: 'Cancelled' },
-    checkIn: { $lt: checkOutDate },
-    checkOut: { $gt: checkInDate },
-  }).toArray();
+  return prisma.booking.findMany({
+    where: {
+      bookingStatus: { not: 'Cancelled' },
+      checkIn: { lt: checkOutDate },
+      checkOut: { gt: checkInDate },
+    }
+  });
 }
 
 function countBookings(bookings) {
@@ -217,11 +194,12 @@ async function checkAvailability({ roomType, checkIn, checkOut }) {
   const bookedCounts = countBookings(activeBookings);
 
   // 1. Fetch blocked dates overlapping with the selected range
-  const { blockedDates } = await getCollections();
-  const overlappingBlocks = await blockedDates.find({
-    startDate: { $lt: checkOutDate },
-    endDate: { $gte: checkInDate }
-  }).toArray();
+  const overlappingBlocks = await prisma.blockedDate.findMany({
+    where: {
+      startDate: { lt: checkOutDate },
+      endDate: { gte: checkInDate }
+    }
+  });
 
   const isHotelFullyBlocked = overlappingBlocks.some(block => block.roomType === 'All' || block.roomType === 'all');
   const blockedRoomTypes = new Set(
@@ -249,13 +227,14 @@ async function getRoomPrice({ roomType, date, subtype }) {
   const normalizedRoomType = normalizeRoomType(roomType);
   const targetDate = date ? toUtcDate(date, 'date') : new Date();
   const normalizedSubtype = normalizeSubtype(subtype, normalizedRoomType);
-  const { roomPrices, seasonalPrices } = await getCollections();
 
-  const seasonalOverride = await seasonalPrices.findOne({
-    roomType: normalizedRoomType,
-    subtype: normalizedSubtype,
-    startDate: { $lte: targetDate },
-    endDate: { $gte: targetDate },
+  const seasonalOverride = await prisma.seasonalPrice.findFirst({
+    where: {
+      roomType: normalizedRoomType,
+      subtype: normalizedSubtype,
+      startDate: { lte: targetDate },
+      endDate: { gte: targetDate },
+    }
   });
 
   if (seasonalOverride) {
@@ -268,9 +247,11 @@ async function getRoomPrice({ roomType, date, subtype }) {
     };
   }
 
-  const dbPrice = await roomPrices.findOne({
-    roomType: normalizedRoomType,
-    subtype: normalizedSubtype,
+  const dbPrice = await prisma.roomPrice.findFirst({
+    where: {
+      roomType: normalizedRoomType,
+      subtype: normalizedSubtype,
+    }
   });
 
   if (dbPrice) {
@@ -296,8 +277,9 @@ async function getRoomPrice({ roomType, date, subtype }) {
 
 async function getRoomDetails({ roomType }) {
   const normalizedRoomType = normalizeRoomType(roomType);
-  const { roomInformation } = await getCollections();
-  const record = await roomInformation.findOne({ roomType: normalizedRoomType });
+  const record = await prisma.roomInformation.findUnique({
+    where: { roomType: normalizedRoomType }
+  });
 
   if (record) {
     return {
@@ -324,8 +306,7 @@ async function getPolicy({ policy }) {
   }
 
   const normalizedPolicy = policy.trim().toLowerCase().replace(/[^a-z]/g, '');
-  const { policies } = await getCollections();
-  const records = await policies.find({}).toArray();
+  const records = await prisma.hotelPolicy.findMany();
 
   const match = records.find((record) => {
     const title = String(record.title || record.policy || record.key || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -361,8 +342,7 @@ async function searchFaq({ query }) {
   }
 
   const normalizedQuery = query.trim().toLowerCase();
-  const { faq } = await getCollections();
-  const records = await faq.find({}).toArray();
+  const records = await prisma.faq.findMany();
 
   const bestMatch = records.find((record) => {
     const question = String(record.question || '').toLowerCase();
@@ -383,14 +363,17 @@ async function searchFaq({ query }) {
 }
 
 async function allocateRoomNumber(roomType, checkInDate, checkOutDate) {
-  const { rooms, bookings } = await getCollections();
-  const roomsOfType = await rooms.find({ roomType }).toArray();
-  const overlappingBookings = await bookings.find({
-    roomType,
-    bookingStatus: { $ne: 'Cancelled' },
-    checkIn: { $lt: checkOutDate },
-    checkOut: { $gt: checkInDate },
-  }).toArray();
+  const roomsOfType = await prisma.room.findMany({
+    where: { roomType }
+  });
+  const overlappingBookings = await prisma.booking.findMany({
+    where: {
+      roomType,
+      bookingStatus: { not: 'Cancelled' },
+      checkIn: { lt: checkOutDate },
+      checkOut: { gt: checkInDate },
+    }
+  });
 
   const occupiedRooms = overlappingBookings.map((booking) => booking.assignedRoom).filter(Boolean);
   const availableRooms = roomsOfType.filter((room) => !occupiedRooms.includes(room.roomNumber));
@@ -479,8 +462,9 @@ async function createBooking({ guestName, mobile, roomType, checkIn, checkOut, s
     updatedAt: new Date(),
   };
 
-  const { bookings } = await getCollections();
-  await bookings.insertOne(booking);
+  await prisma.booking.create({
+    data: booking
+  });
 
   return {
     bookingId,
@@ -493,8 +477,9 @@ async function getBookingStatus({ bookingId }) {
     throw new Error('bookingId is required');
   }
 
-  const { bookings } = await getCollections();
-  const booking = await bookings.findOne({ bookingId });
+  const booking = await prisma.booking.findUnique({
+    where: { bookingId }
+  });
 
   if (!booking) {
     throw new Error('Booking not found');
@@ -782,12 +767,13 @@ async function callGemini(messages) {
 }
 
 async function persistChatTurn({ sessionId, userMessage, botReply }) {
-  const { chatSessions } = await getCollections();
-  await chatSessions.insertOne({
-    sessionId,
-    userMessage,
-    botReply,
-    timestamp: new Date(),
+  await prisma.chatSession.create({
+    data: {
+      sessionId,
+      userMessage,
+      botReply,
+      timestamp: new Date(),
+    }
   });
 }
 
@@ -920,11 +906,12 @@ async function getLocalCalendarReply(text) {
   const startOfMonth = new Date(Date.UTC(targetYear, targetMonth, 1));
   const endOfMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999));
   
-  const { blockedDates } = await getCollections();
-  const blocks = await blockedDates.find({
-    startDate: { $lte: endOfMonth },
-    endDate: { $gte: startOfMonth }
-  }).toArray();
+  const blocks = await prisma.blockedDate.findMany({
+    where: {
+      startDate: { lte: endOfMonth },
+      endDate: { gte: startOfMonth }
+    }
+  });
 
   const totalDays = endOfMonth.getUTCDate();
   const totalCounts = await getTotalRoomCounts();

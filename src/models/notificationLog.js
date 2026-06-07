@@ -1,4 +1,4 @@
-const { getCollection } = require('../config/db');
+const { prisma } = require('../config/db');
 
 /**
  * Log a WhatsApp notification attempt
@@ -11,7 +11,6 @@ const { getCollection } = require('../config/db');
  */
 async function logNotification(logData) {
     try {
-        const collection = getCollection('whatsapp_notification_logs');
         const entry = {
             bookingId: logData.bookingId,
             recipient: logData.recipient,
@@ -20,8 +19,10 @@ async function logNotification(logData) {
             error: logData.error || null,
             timestamp: new Date()
         };
-        const result = await collection.insertOne(entry);
-        return { ...entry, _id: result.insertedId };
+        const result = await prisma.whatsAppNotificationLog.create({
+            data: entry
+        });
+        return { ...entry, id: result.id };
     } catch (error) {
         console.error("❌ Error in logNotification:", error);
         throw error;
@@ -34,11 +35,12 @@ async function logNotification(logData) {
  */
 async function getRecentLogs(limit = 10) {
     try {
-        const collection = getCollection('whatsapp_notification_logs');
-        return await collection.find({})
-            .sort({ timestamp: -1 })
-            .limit(limit)
-            .toArray();
+        return await prisma.whatsAppNotificationLog.findMany({
+            orderBy: {
+                timestamp: 'desc'
+            },
+            take: limit
+        });
     } catch (error) {
         console.error("❌ Error in getRecentLogs:", error);
         return [];
