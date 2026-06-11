@@ -492,23 +492,311 @@ async function getBookingStatus({ bookingId }) {
   };
 }
 
+async function getRoomRestrictions({ roomType, startDate, endDate } = {}) {
+  const where = {};
+  if (roomType) {
+    where.roomType = normalizeRoomType(roomType);
+  }
+  if (startDate || endDate) {
+    where.endDate = { gte: startDate ? toUtcDate(startDate, 'startDate') : new Date() };
+    if (endDate) {
+      where.startDate = { lte: toUtcDate(endDate, 'endDate') };
+    }
+  }
+  const restrictions = await prisma.roomRestriction.findMany({
+    where,
+    orderBy: { startDate: 'asc' }
+  });
+  return restrictions.map(r => ({
+    id: r.id,
+    roomType: r.roomType,
+    startDate: formatIsoDate(r.startDate),
+    endDate: formatIsoDate(r.endDate),
+    totalRooms: r.totalRooms,
+    blockedCount: r.blockedCount,
+    reason: r.reason || 'No reason specified',
+    createdAt: r.createdAt
+  }));
+}
+
+const INDIAN_HOLIDAYS = {
+  0: [ // January
+    { date: 14, name: "Makar Sankranti / Pongal" },
+    { date: 26, name: "Republic Day" }
+  ],
+  1: [ // February
+    { date: 15, name: "Maha Shivratri" },
+    { date: 21, name: "Vasant Panchami" }
+  ],
+  2: [ // March
+    { date: 3, name: "Holi (Dhulandi)" },
+    { date: 19, name: "Chaitra Navratri Starts" },
+    { date: 27, name: "Rama Navami" },
+    { date: 30, name: "Mahavir Jayanti" }
+  ],
+  3: [ // April
+    { date: 3, name: "Good Friday" },
+    { date: 14, name: "Dr. B.R. Ambedkar Jayanti" },
+    { date: 18, name: "Parashurama Jayanti / Akshaya Tritiya" }
+  ],
+  4: [ // May
+    { date: 1, name: "Buddha Purnima" }
+  ],
+  5: [ // June
+    { date: 16, name: "Kabir Jayanti" }
+  ],
+  6: [ // July
+    { date: 15, name: "Muharram" },
+    { date: 26, name: "Ashadhi Ekadashi" }
+  ],
+  7: [ // August
+    { date: 15, name: "Independence Day" },
+    { date: 27, name: "Raksha Bandhan" },
+    { date: 31, name: "Sri Krishna Janmashtami" }
+  ],
+  8: [ // September
+    { date: 4, name: "Ganesh Chaturthi" },
+    { date: 5, name: "Teachers' Day" },
+    { date: 15, name: "Milad un-Nabi" }
+  ],
+  9: [ // October
+    { date: 2, name: "Mahatma Gandhi Jayanti" },
+    { date: 19, name: "Durga Ashtami" },
+    { date: 20, name: "Maha Navami / Dussehra" }
+  ],
+  10: [ // November
+    { date: 8, name: "Diwali / Deepavali" },
+    { date: 9, name: "Govardhan Puja" },
+    { date: 10, name: "Bhai Dooj" },
+    { date: 24, name: "Guru Nanak Jayanti" }
+  ],
+  11: [ // December
+    { date: 25, name: "Christmas Day" }
+  ]
+};
+
+function normalizeDbDate(d) {
+  const date = new Date(d);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+async function createRoomRestriction({ roomType, startDate, endDate, blockedCount, reason }) {
+  if (!roomType || !startDate || !endDate || blockedCount === undefined) {
+    throw new Error('roomType, startDate, endDate and blockedCount are required');
+  }
+
+  const normalizedRoomType = normalizeRoomType(roomType);
+  const start = toUtcDate(startDate, 'startDate');
+  const end = toUtcDate(endDate, 'endDate');
+
+  if (start > end) {
+    throw new Error('startDate must be before or equal to endDate');
+  }
+
+  const count = parseInt(blockedCount, 10);
+  if (isNaN(count) || count < 1) {
+    throw new Error('blockedCount must be a valid positive integer');
+  }
+
+  const totalCounts = await getTotalRoomCounts();
+  const maxRooms = totalCounts[normalizedRoomType] || 0;
+
+  if (count > maxRooms) {
+    throw new Error(`Cannot block ${count} rooms. Only ${maxRooms} physical ${normalizedRoomType} room(s) exist.`);
+  }
+
+  const newRestriction = await prisma.roomRestriction.create({
+    data: {
+      startDate: start,
+      endDate: end,
+      roomType: normalizedRoomType,
+      totalRooms: maxRooms,
+      blockedCount: count,
+      reason: reason || "",
+    }
+  });
+
+  return {
+    success: true,
+    message: `Successfully created restriction: blocked ${count} of ${maxRooms} ${normalizedRoomType} rooms from ${formatIsoDate(start)} to ${formatIsoDate(end)}.`,
+    restriction: newRestriction
+  };
+}
+
+async function createDateBlock({ roomType, startDate, endDate, reason }) {
+  if (!startDate || !endDate) {
+    throw new Error('startDate and endDate are required');
+  }
+
+  const normalizedRoomType = roomType ? (roomType.trim().toLowerCase() === "all" ? "All" : normalizeRoomType(roomType)) : "All";
+  const start = new Date(startDate.split("T")[0] + "T00:00:00.000Z");
+  const end = new Date(endDate.split("T")[0] + "T23:59:59.999Z");
+
+  if (start > end) {
+    throw new Error('startDate must be before or equal to endDate');
+  }
+
+  const newBlock = await prisma.blockedDate.create({
+    data: {
+      startDate: start,
+      endDate: end,
+      roomType: normalizedRoomType,
+      reason: reason || "",
+    }
+  });
+
+  return {
+    success: true,
+    message: `Successfully created block: blocked ${normalizedRoomType === "All" ? "entire hotel" : normalizedRoomType + " rooms"} from ${formatIsoDate(start)} to ${formatIsoDate(end)}.`,
+    block: newBlock
+  };
+}
+
+async function updateRoomPrice({ roomType, subtype, price }) {
+  if (!roomType || !price) {
+    throw new Error('roomType and price are required');
+  }
+
+  const normalizedRoomType = normalizeRoomType(roomType);
+  const normalizedSubtype = normalizeSubtype(subtype, normalizedRoomType);
+  const priceVal = parseFloat(price);
+
+  if (isNaN(priceVal) || priceVal < 0) {
+    throw new Error('price must be a valid positive number');
+  }
+
+  // Find if exists
+  const existing = await prisma.roomPrice.findFirst({
+    where: {
+      roomType: normalizedRoomType,
+      subtype: normalizedSubtype,
+    }
+  });
+
+  let updatedPrice;
+  if (existing) {
+    updatedPrice = await prisma.roomPrice.update({
+      where: { id: existing.id },
+      data: { price: priceVal }
+    });
+  } else {
+    updatedPrice = await prisma.roomPrice.create({
+      data: {
+        roomType: normalizedRoomType,
+        subtype: normalizedSubtype,
+        price: priceVal
+      }
+    });
+  }
+
+  return {
+    success: true,
+    message: `Successfully updated ${normalizedRoomType} ${normalizedSubtype} room price to ₹${priceVal}.`,
+    price: updatedPrice
+  };
+}
+
+async function getOccupancyInsights({ startDate, endDate } = {}) {
+  const start = startDate ? toUtcDate(startDate, 'startDate') : new Date();
+  const end = endDate ? toUtcDate(endDate, 'endDate') : new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  if (start > end) {
+    throw new Error('startDate must be before or equal to endDate');
+  }
+
+  // Fetch active bookings and blocked dates in this range
+  const totalCounts = await getTotalRoomCounts();
+  const totalRooms = Object.values(totalCounts).reduce((a, b) => a + b, 0);
+
+  const bookings = await getActiveBookings(start, end);
+  const blocks = await prisma.blockedDate.findMany({
+    where: {
+      startDate: { lt: end },
+      endDate: { gte: start }
+    }
+  });
+
+  // Calculate day-by-day occupancy stats
+  const dailyStats = [];
+  const curr = new Date(start);
+  while (curr <= end) {
+    const targetDateStr = formatIsoDate(curr);
+    const targetTime = Date.UTC(curr.getUTCFullYear(), curr.getUTCMonth(), curr.getUTCDate());
+
+    // Booked count for this day
+    let bookedToday = 0;
+    const dailyBookings = bookings.filter(b => {
+      const checkInTime = normalizeDbDate(b.checkIn);
+      const checkOutTime = normalizeDbDate(b.checkOut);
+      return targetTime >= checkInTime && targetTime < checkOutTime;
+    });
+
+    dailyBookings.forEach(b => {
+      if (Array.isArray(b.rooms) && b.rooms.length > 0) {
+        b.rooms.forEach(r => {
+          bookedToday += Number(r.quantity) || 1;
+        });
+      } else {
+        bookedToday += 1;
+      }
+    });
+
+    // Check if fully blocked
+    const dayBlocks = blocks.filter(b => {
+      const startTime = normalizeDbDate(b.startDate);
+      const endTime = normalizeDbDate(b.endDate);
+      return targetTime >= startTime && targetTime <= endTime;
+    });
+
+    const isFullyBlocked = dayBlocks.some(b => b.roomType === 'All' || b.roomType === 'all');
+    
+    // Find holiday
+    const m = curr.getUTCMonth();
+    const d = curr.getUTCDate();
+    const holidays = INDIAN_HOLIDAYS[m] || [];
+    const holiday = holidays.find(h => h.date === d);
+
+    dailyStats.push({
+      date: targetDateStr,
+      weekday: curr.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }),
+      occupancyCount: isFullyBlocked ? totalRooms : bookedToday,
+      totalCapacity: totalRooms,
+      occupancyRate: Math.round(((isFullyBlocked ? totalRooms : bookedToday) / totalRooms) * 100),
+      isFullyBlocked,
+      holidayName: holiday ? holiday.name : null,
+      demandLevel: (isFullyBlocked || (bookedToday / totalRooms) >= 0.75) ? 'High' : (bookedToday / totalRooms) >= 0.4 ? 'Medium' : 'Low'
+    });
+
+    curr.setUTCDate(curr.getUTCDate() + 1);
+  }
+
+  return {
+    startDate: formatIsoDate(start),
+    endDate: formatIsoDate(end),
+    dailyStats
+  };
+}
+
 function buildSystemPrompt() {
   return [
-    'You are FRIDAY, the official AI assistant for Hotel Devang Dwarka.',
-    'Be polite, concise, and professional.',
-    'Never guess room availability or prices.',
-    'Always use tools for live room availability, room prices, room details, policies, booking creation, booking status, and FAQs.',
-    'Encourage direct booking whenever it is relevant.',
-    'When the user asks about dates, convert them to ISO dates before calling tools.',
-    'If the user asks for a booking but does not provide required details, ask only for the missing fields.',
-    'If the question is not related to hotel operations, respond briefly and redirect to hotel services.',
+    'You are FRIDAY, the official AI assistant for the owner/administrator of Hotel Devang Dwarka.',
+    'You are talking directly to the hotel owner/manager/admin, NOT to a guest. Always address them respectfully as the Owner/Admin or Sir/Madam.',
+    'Be polite, concise, professional, and operational.',
+    'Never guess room availability, prices, or room restrictions.',
+    'Always use tools to fetch live database information before answering, including room availability, prices, room details, policies, bookings, booking status, and FAQs.',
+    'You have access to admin-only write tools: "create_room_restriction", "create_date_block", and "update_room_price". Always execute these immediately when the owner explicitly commands you to do so.',
+    'You also have access to "get_room_restrictions" and "get_occupancy_insights". Use "get_occupancy_insights" to check daily occupancy rates and holidays. If you see high demand (e.g. occupancy >= 75% or holidays), proactively suggest price optimizations (increases).',
+    'CRITICAL RULE FOR PRICE SUGGESTIONS: If you proactively suggest a price change based on occupancy/holidays, you MUST ask the owner for permission first (e.g. "Would you like me to update this price?"). You must NEVER call the "update_room_price" tool for a suggestion until the owner replies with explicit approval (e.g. "yes", "do it", "go ahead", "apply suggestion").',
+    'Do NOT talk about making a booking for a guest unless the owner explicitly asks you to create a booking.',
+    'When the owner asks about dates, convert them to ISO dates before calling tools.',
+    'If the question is not related to hotel operations, respond briefly and redirect to hotel services or inventory management.',
   ].join(' ');
 }
 
 function getFallbackAssistantReply() {
   return [
-    'Sorry — FRIDAY, our AI assistant is temporarily unavailable.',
-    'I can still help with room availability, booking details, hotel policies, or FAQs. Please try again in a few minutes.',
+    'Sorry, Owner — FRIDAY is temporarily offline for maintenance.',
+    'I can still assist you with local lookups for room availability, prices, policies, or FAQs. Please try again in a few minutes.',
   ].join(' ');
 }
 
@@ -622,6 +910,87 @@ function getToolDefinitions() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'get_room_restrictions',
+        description: 'Fetch active, scheduled, or existing partial room restrictions/blocks set by the owner.',
+        parameters: {
+          type: 'object',
+          properties: {
+            roomType: { type: 'string', description: 'Optional room type (Standard, Deluxe, Super Deluxe, Suite)' },
+            startDate: { type: 'string', description: 'Optional ISO start date, e.g. 2026-06-15' },
+            endDate: { type: 'string', description: 'Optional ISO end date, e.g. 2026-06-16' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_room_restriction',
+        description: 'Create a room restriction to block a specific number of rooms for a room type over a date range. Admin use only.',
+        parameters: {
+          type: 'object',
+          properties: {
+            roomType: { type: 'string', description: 'Room type: Standard, Deluxe, Super Deluxe, Suite' },
+            startDate: { type: 'string', description: 'ISO start date, e.g. 2026-06-15' },
+            endDate: { type: 'string', description: 'ISO end date, e.g. 2026-06-16' },
+            blockedCount: { type: 'number', description: 'Number of rooms of this type to block' },
+            reason: { type: 'string', description: 'Reason for blocking' },
+          },
+          required: ['roomType', 'startDate', 'endDate', 'blockedCount'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_date_block',
+        description: 'Fully block a room type or the entire hotel for public booking over a date range. Admin use only.',
+        parameters: {
+          type: 'object',
+          properties: {
+            roomType: { type: 'string', description: 'Room type to block (Standard, Deluxe, Super Deluxe, Suite) or All for entire hotel' },
+            startDate: { type: 'string', description: 'ISO start date, e.g. 2026-06-15' },
+            endDate: { type: 'string', description: 'ISO end date, e.g. 2026-06-16' },
+            reason: { type: 'string', description: 'Reason for block' },
+          },
+          required: ['startDate', 'endDate'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_room_price',
+        description: 'Update the base price for a room type and AC/Non-AC subtype. Admin use only. If proactively suggesting this, always seek owner approval before running.',
+        parameters: {
+          type: 'object',
+          properties: {
+            roomType: { type: 'string', description: 'Room type: Standard, Deluxe, Super Deluxe, Suite' },
+            subtype: { type: 'string', description: 'Subtype: AC or Non-AC' },
+            price: { type: 'number', description: 'New nightly price' },
+          },
+          required: ['roomType', 'subtype', 'price'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_occupancy_insights',
+        description: 'Fetch day-by-day occupancy rates, holiday indicators, and demand projections to suggest price optimizations. Admin use only.',
+        parameters: {
+          type: 'object',
+          properties: {
+            startDate: { type: 'string', description: 'ISO start date, e.g. 2026-06-15' },
+            endDate: { type: 'string', description: 'ISO end date, e.g. 2026-06-22' },
+          },
+          required: ['startDate', 'endDate'],
+        },
+      },
+    },
   ];
 }
 
@@ -649,6 +1018,16 @@ async function runTool(toolName, args) {
       return createBooking(normalizedArgs);
     case 'get_booking_status':
       return getBookingStatus(normalizedArgs);
+    case 'get_room_restrictions':
+      return getRoomRestrictions(normalizedArgs);
+    case 'create_room_restriction':
+      return createRoomRestriction(normalizedArgs);
+    case 'create_date_block':
+      return createDateBlock(normalizedArgs);
+    case 'update_room_price':
+      return updateRoomPrice(normalizedArgs);
+    case 'get_occupancy_insights':
+      return getOccupancyInsights(normalizedArgs);
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
@@ -1049,13 +1428,13 @@ async function getLocalCalendarReply(text) {
     });
   }
 
-  reply += `\nWould you like me to assist you with a booking for any of these dates?`;
+  reply += `\nWould you like me to help you check restrictions or manage occupancy for these dates, Owner?`;
   return reply;
 }
 
 async function getLocalPricesReply() {
   return [
-    `🙏 Greetings from **Hotel Devang Dwarka**! Here are the standard nightly rates for our rooms:`,
+    `🙏 Greetings, Owner! Here are the configured standard nightly rates for the hotel:`,
     ``,
     `🛏️ **Standard Room**`,
     `• **AC**: ₹1,400 per night`,
@@ -1072,7 +1451,7 @@ async function getLocalPricesReply() {
     `🛏️ **Suite Room**`,
     `• **AC**: ₹3,000 per night`,
     ``,
-    `*Note: Stated prices are standard nightly rates. Would you like me to assist you in booking a room or checking live availability?*`
+    `*Note: Stated prices are standard nightly rates. Would you like me to assist you in reviewing seasonal prices or checking availability?*`
   ].join('\n');
 }
 
@@ -1090,7 +1469,7 @@ async function getLocalPolicyReply(text) {
     try {
       const res = await getPolicy({ policy: policyKey });
       if (res && res.value) {
-        return `🙏 **Hotel Devang Policies** - *${res.policy}*:\n\n${res.value}\n\nIs there anything else I can help you with?`;
+        return `🙏 **Hotel Policies** - *${res.policy}*:\n\n${res.value}\n\nIs there anything else I can help you with, Owner?`;
       }
     } catch (e) {}
   }
@@ -1101,7 +1480,7 @@ async function getLocalFaqReply(text) {
   try {
     const res = await searchFaq({ query: text });
     if (res && res.answer && res.answer !== 'No matching FAQ was found in the hotel database.') {
-      return `🙏 **Frequently Asked Question**:\n\n**Q: ${res.question}**\n**A:** ${res.answer}\n\nIs there anything else I can help you with?`;
+      return `🙏 **Hotel FAQ**:\n\n**Q: ${res.question}**\n**A:** ${res.answer}\n\nIs there anything else I can help you with, Owner?`;
     }
   } catch (e) {}
   return null;
@@ -1109,14 +1488,14 @@ async function getLocalFaqReply(text) {
 
 function getFriendlyFallbackReply() {
   return [
-    `🙏 Thank you for contacting **Hotel Devang Dwarka**!`,
+    `🙏 Greetings, Owner/Admin!`,
     ``,
-    `I am FRIDAY, your automated AI assistant. I am currently performing a brief update, but I can still assist you with:`,
-    `✅ **Live room availability** (e.g., *"is room available on 6th june ?"*)`,
-    `✅ **Standard room prices** (e.g., *"room rates"*)`,
-    `✅ **Hotel policies** (e.g., *"checkin time"*)`,
+    `I am FRIDAY, your automated management assistant. I am currently performing a brief update, but I can still assist you with:`,
+    `✅ **Live room availability and occupancy**`,
+    `✅ **Standard room prices and rates**`,
+    `✅ **Hotel policies**`,
     ``,
-    `📞 For urgent bookings, cancellations, or direct support, please connect with our reception desk directly at **+91 98244 02132**.`
+    `For system troubleshooting or backend queries, please contact direct systems support.`
   ].join('\n');
 }
 
@@ -1152,7 +1531,7 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
         }
 
         const dateStr = formatIndianDate(checkIn);
-        let reply = `🙏 Greetings from **Hotel Devang Dwarka**! Here is the live room availability for **${dateStr}**:\n\n`;
+        let reply = `🙏 Greetings, Owner! Here is the live room availability for **${dateStr}**:\n\n`;
         
         let allSoldOut = true;
         results.forEach(r => {
@@ -1162,7 +1541,7 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
         });
 
         if (allSoldOut) {
-          reply += `⚠️ We are sorry, but all our rooms are fully booked for this date. Please contact our reception at **+91 98244 02132** for cancellation queries or to check alternative dates.`;
+          reply += `⚠️ Note: All rooms are fully booked or blocked for this date.`;
         } else {
           results.forEach(r => {
             if (r.error) {
@@ -1173,7 +1552,7 @@ async function generateAssistantReply({ sessionId, messages = [], userMessage })
               reply += `❌ **${r.roomType}**: Fully booked / Sold out\n`;
             }
           });
-          reply += `\nWould you like me to assist you in making a booking for **${dateStr}**?`;
+          reply += `\nWould you like me to assist you with managing restrictions or bookings for **${dateStr}**?`;
         }
 
         try {
