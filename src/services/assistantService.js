@@ -494,7 +494,7 @@ async function getBookingStatus({ bookingId }) {
 
 function buildSystemPrompt() {
   return [
-    'You are the official AI assistant for Hotel Devang Dwarka.',
+    'You are FRIDAY, the official AI assistant for Hotel Devang Dwarka.',
     'Be polite, concise, and professional.',
     'Never guess room availability or prices.',
     'Always use tools for live room availability, room prices, room details, policies, booking creation, booking status, and FAQs.',
@@ -507,7 +507,7 @@ function buildSystemPrompt() {
 
 function getFallbackAssistantReply() {
   return [
-    'Sorry — our AI assistant is temporarily unavailable.',
+    'Sorry — FRIDAY, our AI assistant is temporarily unavailable.',
     'I can still help with room availability, booking details, hotel policies, or FAQs. Please try again in a few minutes.',
   ].join(' ');
 }
@@ -1111,7 +1111,7 @@ function getFriendlyFallbackReply() {
   return [
     `🙏 Thank you for contacting **Hotel Devang Dwarka**!`,
     ``,
-    `Our automated AI assistant is currently performing a brief update, but I can still assist you with:`,
+    `I am FRIDAY, your automated AI assistant. I am currently performing a brief update, but I can still assist you with:`,
     `✅ **Live room availability** (e.g., *"is room available on 6th june ?"*)`,
     `✅ **Standard room prices** (e.g., *"room rates"*)`,
     `✅ **Hotel policies** (e.g., *"checkin time"*)`,
