@@ -868,7 +868,7 @@ function parseDateFromText(text) {
 function isAvailabilityQuestion(text) {
   if (!text || typeof text !== 'string') return false;
   const lowered = text.toLowerCase();
-  const hasKeywords = /avail|is there a room|rooms left|rooms free|vacan|any room|rooms for|book|stay/i.test(lowered);
+  const hasKeywords = /avail|is there a room|rooms left|rooms free|vacan|any room|rooms for|book|stay|status|stastus|stat/i.test(lowered);
   const hasDatePattern = /\b\d{1,2}\b|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(lowered);
   return hasKeywords && hasDatePattern;
 }
