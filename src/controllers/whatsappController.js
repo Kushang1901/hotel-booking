@@ -106,19 +106,7 @@ async function triggerRetries(req, res) {
 async function logout(req, res) {
     try {
         console.log("🔌 Manual logout triggered...");
-        const client = whatsappService.getClient();
-        
-        if (client && typeof client.logout === 'function') {
-            try {
-                await client.logout();
-                await client.destroy();
-            } catch (err) {
-                console.error("Error logging out of WhatsApp client:", err.message);
-            }
-        }
-        
-        await sessionModel.setDisconnected("Manually logged out by owner.");
-        
+        await whatsappService.logout();
         res.status(200).json({ success: true, message: "WhatsApp session successfully cleared and logged out." });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -134,8 +122,16 @@ async function getDashboard(req, res) {
         const logs = await logModel.getRecentLogs(10);
         const retries = await retryModel.getAllFailedRetries();
         
-        const status = session ? session.status : 'DISCONNECTED';
+        let status = session ? session.status : 'DISCONNECTED';
         const ownerNumber = session ? session.ownerNumber : 'None';
+
+        // Auto-initialize Baileys client if it's currently offline
+        if (status === 'DISCONNECTED' || !whatsappService.getClient()) {
+            whatsappService.initializeWhatsAppClient().catch(err => {
+                console.error("Failed to auto-boot Baileys on dashboard load:", err);
+            });
+            status = 'CONNECTING';
+        }
         const lastConnectedAt = session && session.lastConnectedAt 
             ? new Date(session.lastConnectedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) 
             : 'Never';
@@ -514,33 +510,72 @@ async function getDashboard(req, res) {
                 <p>WhatsApp Notification Service</p>
             </div>
 
-            <div class="status-badge status-DISCONNECTED">
-                <span class="status-dot" style="background-color: var(--accent-red);"></span>
-                <span>DISABLED (BYPASSED)</span>
+            <div class="status-badge status-${status}">
+                <span class="status-dot"></span>
+                <span>${status.replace('_', ' ')}</span>
             </div>
 
             <div class="qr-section" style="width: 100%;">
-                <div style="text-align: center; padding: 1rem;">
-                    <p style="color: var(--accent-gold); font-weight: 600; margin-bottom: 0.5rem; font-size: 1.15rem;">Meta Cloud API Bypassed</p>
-                    <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1rem;">
-                        The Meta WhatsApp Cloud API integration has been disabled and bypassed.
+                ${status === 'QR_READY' && qrDataUrl ? `
+                    <div class="qr-image-wrapper">
+                        <img src="${qrDataUrl}" alt="Scan QR Code" style="display: block;">
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 1.5rem; text-align: center; line-height: 1.4;">
+                        Scan this QR code using the hotel's WhatsApp number (WhatsApp -> Linked Devices -> Link a Device).
                     </p>
-                    <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
-                        Outbound API notifications now resolve instantly using stubs, pending your new custom notification provider integration.
-                    </p>
-                </div>
+                ` : ''}
+
+                ${status === 'CONNECTED' ? `
+                    <div class="success-display">
+                        <div class="success-icon">✓</div>
+                        <h3>Successfully Linked!</h3>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.5rem;">
+                            Ready to send booking notifications automatically.
+                        </p>
+                    </div>
+                ` : ''}
+
+                ${status === 'DISCONNECTED' ? `
+                    <div style="text-align: center; padding: 1rem;">
+                        <p style="color: var(--accent-red); font-weight: 500; margin-bottom: 0.5rem;">Offline</p>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary);">
+                            WhatsApp client is stopped. Click initialize to register session.
+                        </p>
+                    </div>
+                ` : ''}
+
+                ${status === 'CONNECTING' ? `
+                    <div style="text-align: center;">
+                        <p style="color: var(--accent-blue); font-weight: 500; margin-bottom: 0.5rem;">Connecting WebSocket...</p>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary);">
+                            Opening background connection to WhatsApp. Please wait.
+                        </p>
+                    </div>
+                ` : ''}
             </div>
 
             <div class="info-grid">
                 <div class="info-row">
-                    <span class="info-label">Status:</span>
-                    <span class="info-value">Bypassed (Stubs Active)</span>
+                    <span class="info-label">Owner Phone:</span>
+                    <span class="info-value">+${process.env.WHATSAPP_OWNER_NUMBER || '919824402132'}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">Integration:</span>
-                    <span class="info-value">Disabled</span>
+                    <span class="info-label">Active JID:</span>
+                    <span class="info-value">${ownerNumber !== 'None' ? '+' + ownerNumber : 'N/A'}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Last Sync:</span>
+                    <span class="info-value">${lastConnectedAt}</span>
                 </div>
             </div>
+
+            ${status === 'CONNECTED' ? `
+                <button onclick="handleLogout()" class="btn btn-red">Disconnect WhatsApp</button>
+            ` : ''}
+            
+            ${status === 'DISCONNECTED' ? `
+                <button onclick="window.location.reload()" class="btn btn-gold">Initialize Service</button>
+            ` : ''}
         </div>
 
         <!-- RIGHT PANEL: LOGS & RETRIES -->
