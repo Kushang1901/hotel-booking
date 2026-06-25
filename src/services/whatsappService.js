@@ -22,199 +22,42 @@ function formatWhatsAppNumber(phone) {
 }
 
 /**
- * Initializes the WhatsApp connection status to CONNECTED in the database
+ * Stub initialization of the WhatsApp connection status
  */
 async function initializeWhatsAppClient() {
+    console.log("ℹ️ WhatsApp Service initialized (stubs active - Meta integration disabled).");
     try {
-        console.log("🚀 Meta WhatsApp Cloud API Service Initialized");
         const ownerNumber = process.env.WHATSAPP_OWNER_NUMBER || '919824402132';
         await sessionModel.setConnected(ownerNumber);
         isClientReady = true;
     } catch (error) {
-        console.error("❌ Failed to initialize Meta WhatsApp session status:", error);
+        console.error("❌ Failed to set connected status in DB:", error);
     }
     return true;
 }
 
 /**
- * Sends a WhatsApp message via Meta's Official WhatsApp Cloud API
- * @param {string} to - Raw phone number or formatted JID
+ * Stub: Bypasses Meta Cloud API message dispatch
+ * @param {string} to - Raw phone number
  * @param {string} messageText - Text content
  */
 async function sendMessage(to, messageText) {
-    const token = process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-    if (!token || !phoneId) {
-        throw new Error("Meta WhatsApp Cloud API credentials (WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID) not configured in .env.");
-    }
-
-    const cleanTo = to.includes('@c.us') ? to.replace('@c.us', '') : to.replace(/\D/g, "");
-    let formattedTo = cleanTo;
-    
-    if (formattedTo.length === 10) {
-        formattedTo = "91" + formattedTo;
-    }
-
-    try {
-        console.log(`📤 Sending WhatsApp message via Meta Cloud API to: ${formattedTo}...`);
-        
-        const response = await fetch(`https://graph.facebook.com/v18.0/${phoneId}/messages`, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                messaging_product: "whatsapp",
-                recipient_type: "individual",
-                to: formattedTo,
-                type: "text",
-                text: {
-                    preview_url: false,
-                    body: messageText
-                }
-            })
-        });
-
-        const data = await response.json();
-        
-        if (!response.ok) {
-            console.error("Meta API error details:", data);
-            throw new Error(data.error?.message || "Meta API request failed");
-        }
-
-        console.log(`✅ WhatsApp message sent successfully! Meta Message ID: ${data.messages?.[0]?.id}`);
-        return data;
-    } catch (error) {
-        console.error(`❌ Failed to send WhatsApp message to ${formattedTo}:`, error);
-        throw error;
-    }
+    console.log(`📤 WhatsApp stub: message to ${to} bypassed (Meta API disabled).`);
+    return { success: true, message: "Meta API integration is disabled." };
 }
 
 /**
- * Formulates and sends a Booking Notification to the Owner
+ * Stub: Bypasses Booking Notification to the Owner
  * @param {object} booking - Booking schema object
  */
 async function sendBookingNotificationToOwner(booking) {
-    const ownerNumber = process.env.WHATSAPP_OWNER_NUMBER;
-    
-    if (!ownerNumber) {
-        console.warn("⚠️ WHATSAPP_OWNER_NUMBER not set in .env. Cannot notify hotel owner.");
-        return { success: false, error: "WHATSAPP_OWNER_NUMBER not set in environment variables" };
-    }
-
     const bookingId = booking.bookingId;
-    
-    // Deduplication check
-    const alreadySent = await bookingModel.hasNotification(bookingId);
-    if (alreadySent) {
-        console.log(`ℹ️ Booking notification already sent for ${bookingId}. Skipping duplicate.`);
-        return { success: true, duplicate: true };
-    }
-
-    // Format Dates nicely in Indian Standard Time (IST) or standard date string
-    const checkInDateStr = new Date(booking.checkIn).toLocaleDateString("en-IN", { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const checkOutDateStr = new Date(booking.checkOut).toLocaleDateString("en-IN", { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-    // Infer number of guests
-    let guestsCount = 2; // Default fallback
-    let extraMattressDetail = "";
-
-    if (booking.rooms && booking.rooms.length > 0) {
-        guestsCount = booking.rooms.reduce((acc, r) => acc + (Number(r.guests) || 2), 0);
-        const totalMattresses = booking.rooms.reduce((acc, r) => acc + ((r.guests > 2 && r.roomType !== 'Standard') ? (r.guests - 2) : 0), 0);
-        if (totalMattresses > 0) {
-            extraMattressDetail = ` (+ ${totalMattresses} Extra Mattress${totalMattresses > 1 ? 'es' : ''})`;
-        }
-    } else if (booking.guests) {
-        guestsCount = Number(booking.guests);
-        if (booking.extraMattress) {
-            extraMattressDetail = ` (+ 1 Extra Mattress)`;
-        }
-    } else if (booking.extraMattress) {
-        // If extraMattress is boolean and true, guests is likely >= 3
-        guestsCount = 3;
-        extraMattressDetail = ` (+ 1 Extra Mattress)`;
-    }
-
-    // Format room details string
-    let roomDetails = booking.roomType;
-    if (booking.rooms && booking.rooms.length > 0) {
-        roomDetails = booking.rooms.map(r => `${r.quantity}x ${r.roomType} (${r.selectedSubtype})`).join(", ");
-    } else if (booking.selectedSubtype) {
-        roomDetails = `${booking.roomType} (${booking.selectedSubtype})`;
-    }
-
-    // Format guest phone number nicely
-    let cleanGuestPhone = booking.phone ? booking.phone.replace(/\D/g, "") : "";
-    if (cleanGuestPhone.length === 10) {
-        cleanGuestPhone = "91" + cleanGuestPhone;
-    }
-
-    // Compile beautiful message template
-    const textMessage = `🛎️ *NEW HOTEL BOOKING SUCCESS* 🛎️\n\n` +
-        `Dear Owner,\n` +
-        `A new stay reservation has been successfully booked and confirmed!\n\n` +
-        `📝 *Booking Information:*\n` +
-        `• *Booking ID:* ${bookingId}\n` +
-        `• *Guest Name:* ${booking.guestName}\n` +
-        `• *Phone Number:* +${cleanGuestPhone}\n\n` +
-        `🛏️ *Room Details:*\n` +
-        `• *Room Type:* ${roomDetails}\n` +
-        `• *Stay Period:* ${checkInDateStr} to ${checkOutDateStr}\n` +
-        `• *Total Guests:* ${guestsCount} Person${guestsCount > 1 ? 's' : ''}${extraMattressDetail}\n\n` +
-        `💰 *Tariff & Payment:*\n` +
-        `• *Sum Stay Tariff:* ₹${booking.totalAmount.toLocaleString("en-IN")}\n` +
-        `• *Paid Advance:* ₹${booking.paidAmount.toLocaleString("en-IN")}\n` +
-        `• *Due Balance:* *₹${booking.dueAmount.toLocaleString("en-IN")}*\n` +
-        `• *Payment Status:* ${booking.paymentStatus}\n\n` +
-        `✍️ *Special Requests:* ${booking.specialRequests || 'None'}\n\n` +
-        `🎉 *Hotel Devang, Dwarka*`;
-
-    try {
-        await sendMessage(ownerNumber, textMessage);
-        
-        // Log Success in DB
-        await logModel.logNotification({
-            bookingId,
-            recipient: ownerNumber,
-            message: textMessage,
-            status: 'SUCCESS'
-        });
-
-        await bookingModel.markNotificationSent(bookingId, booking);
-        await retryModel.removeRetry(bookingId); // Clean up from retry queue if it was there
-
-        return { success: true };
-    } catch (error) {
-        console.error(`❌ Owner notification failed for booking ${bookingId}:`, error);
-
-        // Log Failure in DB
-        await logModel.logNotification({
-            bookingId,
-            recipient: ownerNumber,
-            message: textMessage,
-            status: 'FAILED',
-            error: error.message
-        });
-
-        await bookingModel.markNotificationFailed(bookingId, error.message, booking);
-
-        // Add to failed retries queue
-        await retryModel.addFailedRetry({
-            bookingId,
-            recipient: ownerNumber,
-            message: textMessage,
-            error: error.message
-        });
-
-        return { success: false, error: error.message };
-    }
+    console.log(`🛎️ WhatsApp stub: Owner booking notification for ID ${bookingId} bypassed (Meta API disabled).`);
+    return { success: true, message: "Meta API integration is disabled." };
 }
 
 /**
- * Gets the active client instance placeholder (returns true for Meta API)
+ * Gets the active client instance placeholder
  */
 function getClient() {
     return true;
