@@ -54,9 +54,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// 📞 REGISTER WHATSAPP MIDDLEWARE ROUTES
-const whatsappRoutes = require('./src/routes/whatsappRoutes');
-app.use(whatsappRoutes);
 
 // ----------------------
 // 🗃 PRISMA/MONGODB CONNECTION
@@ -73,15 +70,6 @@ async function startServer() {
         await db.connectDB();
         isDbConnected = true;
 
-        // 📞 WhatsApp Service and Retry Scheduler Initialization
-        const whatsappService = require('./src/services/whatsappService');
-        const retryService = require('./src/services/retryService');
-        
-        whatsappService.initializeWhatsAppClient().catch(err => {
-            console.error("❌ Failed to auto-initialize WhatsApp Service on startup:", err);
-        });
-        
-        retryService.startRetryScheduler();
 
         const PORT = process.env.PORT || 3000;
         app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
@@ -202,9 +190,9 @@ app.post('/api/book', async (req, res) => {
         const result = await prisma.booking.create({ data: bookingData });
         console.log("✅ Booking saved:", result.id);
 
-        // 📞 Send WhatsApp Notification to Owner
-        const whatsappService = require('./src/services/whatsappService');
-        whatsappService.sendBookingNotificationToOwner({
+        // ✈️ Send Telegram Notification to Owner
+        const telegramService = require('./src/services/telegramService');
+        telegramService.sendBookingNotificationToOwner({
             bookingId: result.id.toString(),
             guestName: bookingData.guest_name,
             phone: bookingData.contact,
@@ -217,7 +205,7 @@ app.post('/api/book', async (req, res) => {
             paymentStatus: "N/A (Admin Created)",
             specialRequests: bookingData.message
         }).catch(err => {
-            console.error("WhatsApp notification dispatch background error:", err);
+            console.error("Telegram notification dispatch background error:", err);
         });
 
         res.status(200).json({
@@ -530,10 +518,10 @@ app.post('/api/public/book', async (req, res) => {
             data: newBooking
         });
 
-        // 📞 Send WhatsApp Notification to Owner
-        const whatsappService = require('./src/services/whatsappService');
-        whatsappService.sendBookingNotificationToOwner(newBooking).catch(err => {
-            console.error("WhatsApp notification dispatch background error:", err);
+        // ✈️ Send Telegram Notification to Owner
+        const telegramService = require('./src/services/telegramService');
+        telegramService.sendBookingNotificationToOwner(newBooking).catch(err => {
+            console.error("Telegram notification dispatch background error:", err);
         });
 
         res.status(200).json({

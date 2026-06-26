@@ -18,11 +18,10 @@
     "mongodb": "^6.20.0",
     "node-fetch": "^3.3.2",
     "oracledb": "^6.9.0",
-    "pino": "^10.3.1",
-    "qrcode": "^1.5.4",
     "twilio": "^5.7.3"
   },
   "devDependencies": {
     "prisma": "6.19.3"
   }
-}
+  }
+
