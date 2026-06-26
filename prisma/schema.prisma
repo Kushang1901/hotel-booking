@@ -1,0 +1,216 @@
+datasource db {
+  provider = "mongodb"
+  url      = env("MONGO_URI")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. Bookings Collection
+model Booking {
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId         String?       @unique
+  guestName         String?
+  guest_name        String?       // Legacy field for quick admin booking
+  phone             String?
+  contact           String?       // Legacy field for quick admin booking
+  dob               String?
+  checkIn           DateTime?
+  check_in          String?       // Legacy field for quick admin booking (saved as string)
+  checkOut          DateTime?
+  check_out         String?       // Legacy field for quick admin booking (saved as string)
+  rooms             RoomBooking[]
+  roomType          String?
+  room_type         String?       // Legacy field for quick admin booking
+  selectedSubtype   String?
+  totalAmount       Float?
+  paidAmount        Float?
+  dueAmount         Float?
+  paymentStatus     String?
+  bookingStatus     String?
+  specialRequests   String?
+  message           String?       // Legacy field for quick admin booking
+  device            String?       // Legacy field for quick admin booking
+  timestamp         DateTime?     // Legacy field for quick admin booking
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  assignedRoom      String?
+  createdAt         DateTime?     @default(now())
+  updatedAt         DateTime?     @updatedAt
+
+  @@map("bookings")
+}
+
+type RoomBooking {
+  roomType        String
+  selectedSubtype String
+  quantity        Int      @default(1)
+  guests          Int
+  extraMattress   Boolean?
+  pricePerNight   Float
+}
+
+// 2. Blocked Dates
+model BlockedDate {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  startDate DateTime
+  endDate   DateTime
+  roomType  String   @default("All")
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("blockeddates")
+}
+
+// 3. Room Price
+model RoomPrice {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  roomType  String
+  subtype   String
+  price     Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("room_prices")
+}
+
+// 4. Seasonal Price
+model SeasonalPrice {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  startDate DateTime
+  endDate   DateTime
+  roomType  String
+  subtype   String
+  price     Float
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("seasonal_prices")
+}
+
+// 5. Visitor Sessions
+model VisitorSession {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId String
+  page      String
+  eventType String
+  timestamp DateTime
+  userAgent String?
+  ip        String?
+
+  @@map("visitor_sessions")
+}
+
+// 6. Rooms
+model Room {
+  id         String @id @default(auto()) @map("_id") @db.ObjectId
+  roomNumber String @unique
+  roomType   String
+
+  @@map("rooms")
+}
+
+// 7. WhatsApp Booking Notifications
+model WhatsAppBookingNotification {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String    @unique
+  status    String
+  sentAt    DateTime?
+  payload   Json?
+  lastError String?
+  updatedAt DateTime  @updatedAt
+
+  @@map("whatsapp_booking_notifications")
+}
+
+// 8. WhatsApp Failed Retries
+model WhatsAppFailedRetry {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId     String   @unique
+  recipient     String
+  message       String
+  attempts      Int
+  maxAttempts   Int      @default(3)
+  lastAttemptAt DateTime
+  nextAttemptAt DateTime
+  status        String
+  error         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("whatsapp_failed_retries")
+}
+
+// 9. WhatsApp Notification Logs
+model WhatsAppNotificationLog {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String
+  recipient String
+  message   String
+  status    String
+  error     String?
+  timestamp DateTime @default(now())
+
+  @@map("whatsapp_notification_logs")
+}
+
+// 10. WhatsApp Sessions
+model WhatsAppSession {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  clientId        String    @unique
+  status          String
+  qrCode          String?
+  ownerNumber     String?
+  lastConnectedAt DateTime?
+  error           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("whatsapp_sessions")
+}
+
+// 11. Hotel Policies
+model HotelPolicy {
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  title   String
+  content String
+
+  @@map("hotel_policies")
+}
+
+// 12. Room Information
+model RoomInformation {
+  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
+  roomType             String   @unique
+  capacity             Int
+  maxOccupancy         Int
+  extraMattressAllowed Boolean
+  extraMattressPrice   Int
+  amenities            String[]
+  description          String?
+
+  @@map("room_information")
+}
+
+// 13. FAQ
+model Faq {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  question String
+  answer   String
+
+  @@map("faq")
+}
+
+// 14. Chat Sessions
+model ChatSession {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId   String
+  userMessage String
+  botReply    String
+  timestamp   DateTime @default(now())
+
+  @@map("chat_sessions")
+}
