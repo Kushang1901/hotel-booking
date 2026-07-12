@@ -13,9 +13,9 @@ const DEFAULT_COUNTS = {
 const DEFAULT_DETAILS = {
   Standard: {
     capacity: 2,
-    maxOccupancy: 3,
-    extraMattressAllowed: true,
-    extraMattressPrice: 300,
+    maxOccupancy: 2,
+    extraMattressAllowed: false,
+    extraMattressPrice: 0,
     amenities: ['AC', 'WiFi', 'TV'],
   },
   Deluxe: {
