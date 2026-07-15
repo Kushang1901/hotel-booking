@@ -249,6 +249,14 @@ async function handleTelegramUpdate(update) {
                                 text: "📊 View Booking History",
                                 callback_data: "view_history"
                             }
+                        ],
+                        [
+                            {
+                                text: "🌐 Open Admin Panel",
+                                web_app: {
+                                    url: "https://devang-inventory.vercel.app"
+                                }
+                            }
                         ]
                     ]
                 }
@@ -292,6 +300,165 @@ async function handleTelegramUpdate(update) {
                 parse_mode: 'HTML'
             });
         } 
+        else if (text.startsWith('/search')) {
+            const query = text.substring(7).trim();
+            if (!query) {
+                await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    chat_id: chatId,
+                    text: `🔍 Please provide a search query.\nUsage: <code>/search Kushang</code> or <code>/search 9773401789</code>`,
+                    parse_mode: 'HTML'
+                });
+                return;
+            }
+
+            const bookings = await prisma.booking.findMany({
+                where: {
+                    OR: [
+                        { guestName: { contains: query, mode: 'insensitive' } },
+                        { guest_name: { contains: query, mode: 'insensitive' } },
+                        { phone: { contains: query, mode: 'insensitive' } },
+                        { contact: { contains: query, mode: 'insensitive' } },
+                        { bookingId: { contains: query, mode: 'insensitive' } }
+                    ]
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 15
+            });
+
+            if (bookings.length === 0) {
+                await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    chat_id: chatId,
+                    text: `🔍 No bookings matching "<b>${escapeHTML(query)}</b>" were found.`,
+                    parse_mode: 'HTML'
+                });
+                return;
+            }
+
+            let searchResultMsg = `<b>🔍 Search Results for "${escapeHTML(query)}" (${bookings.length}):</b>\n\n`;
+            bookings.forEach((b, idx) => {
+                const checkInDate = b.checkIn 
+                    ? new Date(b.checkIn).toLocaleDateString("en-IN", { day: '2-digit', month: '2-digit' })
+                    : (b.check_in || "N/A");
+                const checkOutDate = b.checkOut
+                    ? new Date(b.checkOut).toLocaleDateString("en-IN", { day: '2-digit', month: '2-digit' })
+                    : (b.check_out || "N/A");
+                const guest = escapeHTML(b.guestName || b.guest_name || "N/A");
+                const cmdId = (b.bookingId || b.id).toString().replace(/-/g, '_');
+                
+                searchResultMsg += `${idx + 1}. <b>${guest}</b> (${checkInDate} to ${checkOutDate})\n` +
+                                   `   • ID: <code>${b.bookingId || "N/A"}</code>\n` +
+                                   `   • Details: /view_${cmdId}\n\n`;
+            });
+
+            await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                chat_id: chatId,
+                text: searchResultMsg,
+                parse_mode: 'HTML'
+            });
+        }
+        else if (text.startsWith('/check')) {
+            let dateStr = text.substring(6).trim();
+            if (!dateStr) {
+                const now = new Date();
+                const istOffset = 5.5 * 60 * 60 * 1000;
+                const istTime = new Date(now.getTime() + istOffset);
+                const yyyy = istTime.getUTCFullYear();
+                const mm = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+                const dd = String(istTime.getUTCDate()).padStart(2, '0');
+                dateStr = `${yyyy}-${mm}-${dd}`;
+            }
+
+            let targetDate;
+            if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+                const parts = dateStr.split('-');
+                targetDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00.000Z`);
+            } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                targetDate = new Date(`${dateStr}T00:00:00.000Z`);
+            } else {
+                targetDate = new Date(dateStr);
+            }
+
+            if (isNaN(targetDate.getTime())) {
+                await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    chat_id: chatId,
+                    text: `⚠️ <b>Invalid date format.</b> Please use DD-MM-YYYY or YYYY-MM-DD (e.g. <code>/check 15-07-2026</code>).`,
+                    parse_mode: 'HTML'
+                });
+                return;
+            }
+
+            const startOfDay = new Date(targetDate);
+            startOfDay.setUTCHours(0, 0, 0, 0);
+            const endOfDay = new Date(targetDate);
+            endOfDay.setUTCHours(23, 59, 59, 999);
+
+            const bookings = await prisma.booking.findMany({
+                where: {
+                    bookingStatus: { not: "Cancelled" },
+                    checkIn: { lte: endOfDay },
+                    checkOut: { gte: startOfDay }
+                }
+            });
+
+            const checkIns = [];
+            const checkOuts = [];
+            const inHouse = [];
+
+            bookings.forEach(b => {
+                const checkInDate = b.checkIn ? new Date(b.checkIn) : null;
+                const checkOutDate = b.checkOut ? new Date(b.checkOut) : null;
+
+                if (checkInDate && checkInDate >= startOfDay && checkInDate <= endOfDay) {
+                    checkIns.push(b);
+                } else if (checkOutDate && checkOutDate >= startOfDay && checkOutDate <= endOfDay) {
+                    checkOuts.push(b);
+                } else {
+                    inHouse.push(b);
+                }
+            });
+
+            const formattedDate = targetDate.toLocaleDateString("en-IN", { day: '2-digit', month: '2-digit', year: 'numeric' });
+            let reportMsg = `<b>📅 Occupancy Report for ${formattedDate}:</b>\n\n`;
+
+            reportMsg += `🛎️ <b>Check-ins (${checkIns.length}):</b>\n`;
+            if (checkIns.length === 0) {
+                reportMsg += `<i>No arrivals scheduled</i>\n`;
+            } else {
+                checkIns.forEach((b, idx) => {
+                    const guest = escapeHTML(b.guestName || b.guest_name || "N/A");
+                    const cmdId = (b.bookingId || b.id).toString().replace(/-/g, '_');
+                    reportMsg += `${idx + 1}. ${guest} (/view_${cmdId})\n`;
+                });
+            }
+
+            reportMsg += `\n🚪 <b>Check-outs (${checkOuts.length}):</b>\n`;
+            if (checkOuts.length === 0) {
+                reportMsg += `<i>No departures scheduled</i>\n`;
+            } else {
+                checkOuts.forEach((b, idx) => {
+                    const guest = escapeHTML(b.guestName || b.guest_name || "N/A");
+                    const cmdId = (b.bookingId || b.id).toString().replace(/-/g, '_');
+                    reportMsg += `${idx + 1}. ${guest} (/view_${cmdId})\n`;
+                });
+            }
+
+            reportMsg += `\n🛏️ <b>Staying In-House (${inHouse.length}):</b>\n`;
+            if (inHouse.length === 0) {
+                reportMsg += `<i>No other active stays</i>\n`;
+            } else {
+                inHouse.forEach((b, idx) => {
+                    const guest = escapeHTML(b.guestName || b.guest_name || "N/A");
+                    const cmdId = (b.bookingId || b.id).toString().replace(/-/g, '_');
+                    reportMsg += `${idx + 1}. ${guest} (/view_${cmdId})\n`;
+                });
+            }
+
+            await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                chat_id: chatId,
+                text: reportMsg,
+                parse_mode: 'HTML'
+            });
+        }
         else if (text.startsWith('/view_')) {
             const cmdId = text.substring(6).trim();
             // Translate back to the original database hyphenated identifier format
@@ -384,15 +551,28 @@ async function handleTelegramUpdate(update) {
         } 
         else if (text === '❓ Help' || text.startsWith('/help')) {
             const helpMsg = `📖 <b>Hotel Devang Bot Help Menu</b>\n\n` +
-                `• Press <b>📊 View Booking History</b> or type /history to see recent bookings.\n` +
-                `• Tap on the <code>/view_[id]</code> link on any booking item to see full stay details.\n` +
                 `• /start - Subscribe to booking notifications.\n` +
+                `• /history - View recent bookings.\n` +
+                `• /search <code>[query]</code> - Search bookings by Guest Name, Phone, or Booking ID (e.g. <code>/search Kushang</code>).\n` +
+                `• /check <code>[date]</code> - Check arrivals/departures/stays for a specific date (DD-MM-YYYY or YYYY-MM-DD, e.g. <code>/check 15-07-2026</code>). Leaving date blank defaults to today.\n` +
                 `• /help - Display this help menu.`;
 
             await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                 chat_id: chatId,
                 text: helpMsg,
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            {
+                                text: "🌐 Open Admin Panel",
+                                web_app: {
+                                    url: "https://devang-inventory.vercel.app"
+                                }
+                            }
+                        ]
+                    ]
+                }
             });
         }
     } catch (err) {
