@@ -297,12 +297,14 @@ async function handleTelegramUpdate(update) {
             // Translate back to the original database hyphenated identifier format
             const searchId = cmdId.replace(/_/g, '-');
 
+            const queryConditions = [{ bookingId: searchId }];
+            if (/^[0-9a-fA-F]{24}$/.test(searchId)) {
+                queryConditions.push({ id: searchId });
+            }
+
             const booking = await prisma.booking.findFirst({
                 where: {
-                    OR: [
-                        { bookingId: searchId },
-                        { id: searchId }
-                    ]
+                    OR: queryConditions
                 }
             });
 
