@@ -70,6 +70,11 @@ async function startServer() {
         await db.connectDB();
         isDbConnected = true;
 
+        // Initialize Telegram Bot (webhook in prod, long-polling in dev)
+        const { initTelegramBot } = require('./src/services/telegramService');
+        initTelegramBot().catch(err => {
+            console.error("⚠️ Failed to initialize Telegram Bot:", err);
+        });
 
         const PORT = process.env.PORT || 3000;
         app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
@@ -87,6 +92,18 @@ async function startServer() {
 // 📍 Health Check
 app.get('/', (req, res) => {
     res.send("Hotel Devang Booking API is running ✅");
+});
+
+// ✈️ Telegram Bot Webhook Route
+app.post('/api/telegram-webhook', async (req, res) => {
+    try {
+        const { handleTelegramUpdate } = require('./src/services/telegramService');
+        await handleTelegramUpdate(req.body);
+        res.status(200).send("OK");
+    } catch (err) {
+        console.error("❌ Error processing webhook update:", err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 📘 Get All Bookings
