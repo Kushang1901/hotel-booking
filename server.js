@@ -144,24 +144,21 @@ app.post('/api/book', async (req, res) => {
             return res.status(400).json({ success: false, error: "reCAPTCHA token missing" });
         }
 
-        // 🔒 2️⃣ Verify reCAPTCHA with Google
-        const verifyURL = "https://www.google.com/recaptcha/api/siteverify";
+        // 🔒 2️⃣ Verify Turnstile with Cloudflare
+        const verifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
         const recaptchaResponse = await axios.post(
             verifyURL,
-            null,
             {
-                params: {
-                    secret: process.env.RECAPTCHA_SECRET,
-                    response: recaptchaToken
-                }
+                secret: process.env.RECAPTCHA_SECRET,
+                response: recaptchaToken
             }
         );
 
         if (!recaptchaResponse.data.success) {
             return res.status(400).json({
                 success: false,
-                error: "reCAPTCHA verification failed"
+                error: "Verification failed"
             });
         }
 
@@ -379,22 +376,19 @@ app.post('/api/public/book', async (req, res) => {
             return res.status(400).json({ error: "Missing guest, room type, or date details." });
         }
 
-        // Verify reCAPTCHA token if sent
+        // Verify Turnstile token if sent
         if (recaptchaToken) {
-            const verifyURL = "https://www.google.com/recaptcha/api/siteverify";
+            const verifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
             const recaptchaResponse = await axios.post(
                 verifyURL,
-                null,
                 {
-                    params: {
-                        secret: process.env.RECAPTCHA_SECRET,
-                        response: recaptchaToken
-                    }
+                    secret: process.env.RECAPTCHA_SECRET,
+                    response: recaptchaToken
                 }
             );
 
             if (!recaptchaResponse.data.success) {
-                return res.status(400).json({ error: "reCAPTCHA verification failed." });
+                return res.status(400).json({ error: "Verification failed." });
             }
         }
 
